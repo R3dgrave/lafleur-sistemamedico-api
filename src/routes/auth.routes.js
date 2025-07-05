@@ -5,7 +5,7 @@ const { protect } = require("../middlewares/auth");
 
 router.post("/registro", authController.registerAdmin);
 router.post("/inicio-sesion", authController.loginAdmin);
-router.post("/cerrar-sesion", authController.logoutAdmin); // Logout requiere autenticación para saber quién cierra sesión
+router.post("/cerrar-sesion", authController.logoutAdmin);
 router.post("/refrescar", authController.refreshAccessToken);
 
 module.exports = router;

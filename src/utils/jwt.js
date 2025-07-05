@@ -8,7 +8,7 @@ const REFRESH_TOKEN_EXPIRATION_DAYS_INT = parseInt(
   process.env.REFRESH_TOKEN_EXPIRATION_DAYS || "7",
   10
 );
-const REFRESH_TOKEN_EXPIRATION_JWT_FORMAT = `${REFRESH_TOKEN_EXPIRATION_DAYS_INT}d`; // Para jwt.sign
+const REFRESH_TOKEN_EXPIRATION_JWT_FORMAT = `${REFRESH_TOKEN_EXPIRATION_DAYS_INT}d`;
 
 // Función para generar un Access Token
 const generateAccessToken = (payload) => {
@@ -19,7 +19,6 @@ const generateAccessToken = (payload) => {
 
 // Función para generar un Refresh Token (ya no se guarda en la DB)
 const generateRefreshToken = (administrador_id) => {
-  // El payload solo necesita el ID del administrador
   return jwt.sign({ id: administrador_id }, REFRESH_TOKEN_SECRET, {
     expiresIn: REFRESH_TOKEN_EXPIRATION_JWT_FORMAT,
   });
@@ -30,7 +29,7 @@ const verifyAccessToken = (token) => {
   try {
     return jwt.verify(token, ACCESS_TOKEN_SECRET);
   } catch (error) {
-    return null; // Token inválido o expirado
+    return null;
   }
 };
 
@@ -39,7 +38,7 @@ const verifyRefreshToken = (token) => {
   try {
     return jwt.verify(token, REFRESH_TOKEN_SECRET);
   } catch (error) {
-    return null; // Refresh Token inválido o expirado
+    return null;
   }
 };
 

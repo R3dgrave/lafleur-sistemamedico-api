@@ -2,8 +2,7 @@
 const express = require("express");
 const router = express.Router();
 
-const authRoutes = require("./auth.routes"); // Asume que tienes rutas para login/registro de administradores
-// ... importa otras rutas
+const authRoutes = require("./auth.routes");
 
 router.use("/autenticacion", authRoutes);
 

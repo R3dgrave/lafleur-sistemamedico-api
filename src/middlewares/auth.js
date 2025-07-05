@@ -16,14 +16,13 @@ const protect = async (req, res, next) => {
   }
 
   try {
-    const decoded = verifyAccessToken(token); // Usa verifyAccessToken
+    const decoded = verifyAccessToken(token);
     if (!decoded || !decoded.id) {
       return res.status(401).json({ message: "Token inválido o expirado." });
     }
 
-    // Adjunta el usuario al request (útil para saber quién hace la acción)
     req.user = await Administrador.findByPk(decoded.id, {
-      attributes: ["administrador_id", "email", "nombre"], // Selecciona solo los campos necesarios
+      attributes: ["administrador_id", "email", "nombre"],
     });
 
     if (!req.user) {

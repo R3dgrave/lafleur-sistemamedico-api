@@ -32,8 +32,8 @@ const Administrador = sequelize.define(
     },
   },
   {
-    tableName: "Administradores", // Nombre de la tabla en la DB
-    timestamps: false, // No manejar createdAt/updatedAt automáticamente
+    tableName: "Administradores",
+    timestamps: false,
   }
 );
 
