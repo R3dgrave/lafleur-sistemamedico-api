@@ -1,11 +1,19 @@
-const { Administrador } = require("../models"); // Ya no importamos RefreshToken
+const db = require("../models");
+const Administrador = db.Administrador; // Ya no importamos RefreshToken
 const { hashPassword, comparePassword } = require("../utils/hash");
+const transporter = require("../config/nodemailer");
+const crypto = require("crypto");
 const {
   generateAccessToken,
   generateRefreshToken,
   verifyRefreshToken,
 } = require("../utils/jwt");
-const { loginSchema, administradorSchema } = require("../utils/validation");
+const {
+  loginSchema,
+  administradorSchema,
+  forgotPasswordSchema,
+  changePasswordSchema,
+} = require("../utils/validation");
 
 const REFRESH_TOKEN_COOKIE_EXPIRATION_DAYS = parseInt(
   process.env.REFRESH_TOKEN_EXPIRATION_DAYS || "7",
@@ -27,7 +35,7 @@ const registerAdmin = async (req, res, next) => {
 
     res.status(201).json({
       message: "Administrador registrado exitosamente",
-      admin: newAdmin,
+      user: newAdmin,
     });
   } catch (error) {
     if (error.name === "SequelizeUniqueConstraintError") {
@@ -68,7 +76,7 @@ const loginAdmin = async (req, res, next) => {
     res.status(200).json({
       message: "Inicio de sesión exitoso",
       accessToken,
-      admin: {
+      user: {
         id: admin.administrador_id,
         nombre: admin.nombre,
         email: admin.email,
@@ -139,9 +147,117 @@ const refreshAccessToken = async (req, res, next) => {
   }
 };
 
+const getAuthenticatedUser = async (req, res, next) => {
+  try {
+    if (req.user) {
+      return res.status(200).json({
+        email: req.user.email,
+        nombre: req.user.nombre || "Usuario",
+      });
+    } else {
+      return res
+        .status(401)
+        .json({ message: "No se encontró información de usuario." });
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+const forgotPassword = async (req, res, next) => {
+  let administrador;
+  try {
+    const validatedData = forgotPasswordSchema.parse(req.body);
+    const { email } = validatedData;
+
+    administrador = await Administrador.findOne({ where: { email } });
+
+    if (!administrador) {
+      return res.status(200).json({
+        message:
+          "Si el correo electrónico existe, se ha enviado un enlace para restablecer la contraseña.",
+      });
+    }
+
+    const resetToken = administrador.getResetPasswordToken();
+    await administrador.save({
+      fields: ["resetPasswordToken", "resetPasswordExpires"],
+    });
+
+    const resetUrl = `${process.env.FRONTEND_URL}/restablecer-contrasena/${resetToken}`;
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: administrador.email,
+      subject: "Restablecimiento de Contraseña",
+      html: `
+        <p>Has solicitado restablecer tu contraseña.</p>
+        <p>Por favor, haz clic en el siguiente enlace para restablecer tu contraseña:</p>
+        <p><a href="${resetUrl}">Restablecer Contraseña</a></p>
+        <p>Este enlace expirará en 1 hora.</p>
+        <p>Si no solicitaste un restablecimiento de contraseña, ignora este correo electrónico.</p>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.status(200).json({
+      message:
+        "Si el correo electrónico existe, se ha enviado un enlace para restablecer la contraseña.",
+    });
+  } catch (error) {
+    console.error("Error al solicitar restablecimiento de contraseña:", error);
+    if (administrador) {
+      administrador.resetPasswordToken = null;
+      administrador.resetPasswordExpires = null;
+      await administrador.save();
+    }
+    next(error);
+  }
+};
+
+const resetPassword = async (req, res, next) => {
+  try {
+    const { token } = req.params; // Token de la URL
+    const validatedData = changePasswordSchema.parse(req.body);
+    const { password_hash } = validatedData;
+
+    // Hashear el token de la URL para compararlo con el guardado en la DB
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    const administrador = await Administrador.findOne({
+      where: {
+        resetPasswordToken: hashedToken,
+        resetPasswordExpires: { [require("sequelize").Op.gt]: Date.now() },
+      },
+    });
+
+    if (!administrador) {
+      return res
+        .status(400)
+        .json({ message: "Token de restablecimiento inválido o expirado." });
+    }
+
+    if (administrador) {
+      administrador.password_hash = password_hash;
+      administrador.resetPasswordToken = null;
+      administrador.resetPasswordExpires = null;
+      await administrador.save();
+    }
+
+    res.status(200).json({ message: "Contraseña restablecida exitosamente." });
+  } catch (error) {
+    console.error("Error al restablecer contraseña:", error);
+    next(error);
+  }
+};
+
 module.exports = {
   registerAdmin,
   loginAdmin,
   logoutAdmin,
   refreshAccessToken,
+  getAuthenticatedUser,
+  forgotPassword,
+  resetPassword,
 };

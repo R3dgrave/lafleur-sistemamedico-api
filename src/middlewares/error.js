@@ -9,7 +9,7 @@
  */
 const errorHandler = (err, req, res, next) => {
   // Determina el código de estado HTTP. Si el error tiene un `statusCode`, úsalo; de lo contrario, 500 (Internal Server Error).
-  const statusCode = err.statusCode || 500;
+  let statusCode = err.statusCode || 500;
 
   // Determina el mensaje de error a enviar.
   // En desarrollo, puedes enviar el mensaje de error completo y el stack trace.

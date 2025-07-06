@@ -6,6 +6,7 @@ const apiRoutes = require("./routes/index");
 const { apiLimiter, loginLimiter } = require("./middlewares/rateLimit");
 const errorHandler = require("./middlewares/error");
 const cookieParser = require("cookie-parser");
+require("dotenv").config();
 
 const app = express();
 
@@ -13,7 +14,10 @@ const app = express();
 app.use(
   cors({
     origin: process.env.FRONTEND_URL,
-    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], // Métodos HTTP permitidos
+    allowedHeaders: ["Content-Type", "Authorization"], // Encabezados permitidos (importante para Authorization)
+    credentials: true, // Esto es CRUCIAL para permitir el envío de cookies (como tu refreshToken HttpOnly)
+    optionsSuccessStatus: 200, // Algunas configuraciones antiguas esperaban 200 para OPTIONS, aunque 204 es más común
   })
 );
 app.use(helmet());

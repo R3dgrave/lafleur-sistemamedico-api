@@ -7,5 +7,8 @@ router.post("/registro", authController.registerAdmin);
 router.post("/inicio-sesion", authController.loginAdmin);
 router.post("/cerrar-sesion", authController.logoutAdmin);
 router.post("/refrescar", authController.refreshAccessToken);
+router.get("/perfil", protect, authController.getAuthenticatedUser);
+router.post("/olvide-contrasena", authController.forgotPassword);
+router.post("/restablecer-contrasena/:token", authController.resetPassword);
 
 module.exports = router;
