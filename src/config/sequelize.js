@@ -9,13 +9,7 @@ const sequelize = new Sequelize(
     host: process.env.DB_HOST,
     port: process.env.DB_PORT,
     dialect: "postgres",
-    logging: false, // Puedes cambiar a console.log para ver las queries SQL
-    //dialectOptions: {
-    //ssl: {
-    //require: true,
-    //rejectUnauthorized: false, // Considera usar un certificado si estás en producción
-    //},
-    //},
+    logging: false,
     pool: {
       max: 5,
       min: 0,
@@ -33,7 +27,7 @@ async function connectDB() {
       "Conexión a la base de datos establecida correctamente con Sequelize."
     );
     require("../models");
-    await sequelize.sync({ alter: true }); // O { force: true } si estás seguro de querer borrar datos
+    await sequelize.sync({ alter: true });
     console.log("Modelos sincronizados con la base de datos.");
   } catch (error) {
     console.error("No se pudo conectar a la base de datos:", error);
