@@ -10,21 +10,18 @@ const REFRESH_TOKEN_EXPIRATION_DAYS_INT = parseInt(
 );
 const REFRESH_TOKEN_EXPIRATION_JWT_FORMAT = `${REFRESH_TOKEN_EXPIRATION_DAYS_INT}d`;
 
-// Función para generar un Access Token
 const generateAccessToken = (payload) => {
   return jwt.sign(payload, ACCESS_TOKEN_SECRET, {
     expiresIn: ACCESS_TOKEN_EXPIRATION,
   });
 };
 
-// Función para generar un Refresh Token (ya no se guarda en la DB)
 const generateRefreshToken = (administrador_id) => {
   return jwt.sign({ id: administrador_id }, REFRESH_TOKEN_SECRET, {
     expiresIn: REFRESH_TOKEN_EXPIRATION_JWT_FORMAT,
   });
 };
 
-// Función para verificar un Access Token
 const verifyAccessToken = (token) => {
   try {
     return jwt.verify(token, ACCESS_TOKEN_SECRET);
@@ -33,7 +30,6 @@ const verifyAccessToken = (token) => {
   }
 };
 
-// Función para verificar un Refresh Token (ya no necesita buscar en DB)
 const verifyRefreshToken = (token) => {
   try {
     return jwt.verify(token, REFRESH_TOKEN_SECRET);

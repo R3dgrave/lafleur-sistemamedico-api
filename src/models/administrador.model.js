@@ -34,11 +34,11 @@ const Administrador = sequelize.define(
     },
     resetPasswordToken: {
       type: DataTypes.STRING,
-      allowNull: true, // Puede ser nulo si no hay un proceso de restablecimiento activo
+      allowNull: true,
     },
     resetPasswordExpires: {
       type: DataTypes.DATE,
-      allowNull: true, // Puede ser nulo si no hay un proceso de restablecimiento activo
+      allowNull: true,
     },
   },
   {
@@ -47,7 +47,6 @@ const Administrador = sequelize.define(
   }
 );
 
-// Hook para hashear la contraseña antes de crear un nuevo administrador
 Administrador.beforeCreate(async (administrador) => {
   if (administrador.password_hash) {
     administrador.password_hash = await bcrypt.hash(
@@ -57,7 +56,6 @@ Administrador.beforeCreate(async (administrador) => {
   }
 });
 
-// Hook para hashear la contraseña antes de actualizarla (si el campo cambia)
 Administrador.beforeUpdate(async (administrador, options) => {
   if (administrador.changed("password_hash") && administrador.password_hash) {
     administrador.password_hash = await bcrypt.hash(
@@ -67,12 +65,10 @@ Administrador.beforeUpdate(async (administrador, options) => {
   }
 });
 
-// Método para comparar contraseñas (si no lo tienes ya)
 Administrador.prototype.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password_hash);
 };
 
-// --- NUEVO MÉTODO PARA GENERAR EL TOKEN DE RESTABLECIMIENTO ---
 Administrador.prototype.getResetPasswordToken = function () {
   const resetToken = crypto.randomBytes(32).toString("hex");
   this.resetPasswordToken = crypto

@@ -1,5 +1,5 @@
 const db = require("../models");
-const Administrador = db.Administrador; // Ya no importamos RefreshToken
+const Administrador = db.Administrador;
 const { hashPassword, comparePassword } = require("../utils/hash");
 const transporter = require("../config/nodemailer");
 const crypto = require("crypto");
@@ -218,11 +218,10 @@ const forgotPassword = async (req, res, next) => {
 
 const resetPassword = async (req, res, next) => {
   try {
-    const { token } = req.params; // Token de la URL
+    const { token } = req.params;
     const validatedData = changePasswordSchema.parse(req.body);
     const { password_hash } = validatedData;
 
-    // Hashear el token de la URL para compararlo con el guardado en la DB
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
     const administrador = await Administrador.findOne({
