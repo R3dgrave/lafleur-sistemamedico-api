@@ -21,6 +21,7 @@
     "express-rate-limit": "^7.5.1",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
+    "luxon": "^3.7.1",
     "morgan": "^1.10.0",
     "multer": "^2.0.1",
     "nodemailer": "^7.0.4",
@@ -29,5 +30,8 @@
     "sequelize": "^6.37.7",
     "uuid": "^11.1.0",
     "zod": "^3.25.71"
+  },
+  "devDependencies": {
+    "sequelize-cli": "^6.6.3"
   }
 }
