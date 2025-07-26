@@ -1,38 +1,49 @@
+// src/config/sequelize.js
 const { Sequelize } = require("sequelize");
 require("dotenv").config();
 
+const env = process.env.NODE_ENV || "development";
+const config = require("../../config/config.js")[env];
+
+// Inicializa Sequelize usando la configuración
 const sequelize = new Sequelize(
-  process.env.DB_NAME,
-  process.env.DB_USER,
-  process.env.DB_PASSWORD,
+  config.database,
+  config.username,
+  config.password,
   {
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    dialect: "postgres",
-    logging: false,
-    pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
-      idle: 10000,
-    },
+    host: config.host,
+    port: config.port,
+    dialect: config.dialect,
+    logging: config.logging,
+    pool: config.pool,
+    dialectOptions: config.dialectOptions,
   }
 );
+
+// Importar los modelos a través del index.js generado por sequelize-cli
+// Este `db` contendrá sequelize, Sequelize, y todos tus modelos (db.Administrador, db.Paciente, etc.)
+const db = require("../../models");
 
 // Autenticar la conexión
 async function connectDB() {
   try {
-    await sequelize.authenticate();
+    await db.sequelize.authenticate(); // Usa db.sequelize
     console.log(
       "Conexión a la base de datos establecida correctamente con Sequelize."
     );
-    require("../models");
-    await sequelize.sync({ alter: true });
-    console.log("Modelos sincronizados con la base de datos.");
+
+    // **IMPORTANTE: Elimina sequelize.sync({ force: true }); de aquí**
+    // Si estás usando sequelize-cli para migraciones, la gestión del esquema
+    // se hará con `npx sequelize-cli db:migrate`.
+    // Si todavía estás en desarrollo y quieres el auto-sync con seeding:
+    // const seedDatabase = require('../../src/seeders/seed'); // Ajusta la ruta
+    // await db.sequelize.sync({ force: true });
+    // console.log("Modelos sincronizados con la base de datos.");
+    // await seedDatabase();
   } catch (error) {
     console.error("No se pudo conectar a la base de datos:", error);
     process.exit(1);
   }
 }
 
-module.exports = { sequelize, connectDB };
+module.exports = { sequelize: db.sequelize, connectDB, db };

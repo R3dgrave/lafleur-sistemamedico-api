@@ -2,11 +2,12 @@
 const express = require("express");
 const router = express.Router();
 const patientController = require("../controllers/patient.controller");
-const { protect } = require("../middlewares/auth");
+const { protect } = require("../middlewares/auth.middleware");
 
 router.post("/", protect, patientController.createPaciente);
 router.get("/", protect, patientController.getAllPacientes);
-router.get("/rut/:rut", patientController.getPacienteByRut);
+router.get("/rut/:rut", protect, patientController.getPacienteByRut);
+router.get("/buscar", protect, patientController.searchPacientes);
 router.get("/:id", protect, patientController.getPacienteById);
 router.put("/:id", protect, patientController.updatePaciente);
 router.delete("/:id", protect, patientController.deletePaciente);
