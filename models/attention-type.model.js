@@ -1,4 +1,4 @@
-// models/TipoAtencion.js
+// models/attention-type.model.js
 "use strict";
 const { Model } = require("sequelize");
 

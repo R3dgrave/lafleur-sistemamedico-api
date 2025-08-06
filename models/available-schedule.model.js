@@ -1,4 +1,4 @@
-// models/HorarioDisponible.js
+// models/available-schedule.model.js
 "use strict";
 const { Model } = require("sequelize");
 

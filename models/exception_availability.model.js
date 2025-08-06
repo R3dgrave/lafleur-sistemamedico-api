@@ -1,4 +1,4 @@
-// models/ExcepcionDisponibilidad.js
+// models/exception_availability.model.js
 "use strict";
 const { Model } = require("sequelize");
 

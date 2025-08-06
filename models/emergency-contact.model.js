@@ -1,4 +1,4 @@
-// models/ContactoEmergencia.js
+// models/emergency-contact.model.js
 "use strict";
 const { Model } = require("sequelize");
 

@@ -1,4 +1,4 @@
-// models/Cita.js
+// models/appointment.model.js
 'use strict';
 const { Model } = require('sequelize');
 
@@ -43,6 +43,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     administrador_id: {
       type: DataTypes.INTEGER,
+      allowNull: true,
     },
   }, {
     sequelize,
@@ -50,7 +51,20 @@ module.exports = (sequelize, DataTypes) => {
     tableName: 'Citas',
     timestamps: false,
     createdAt: false,
-    updatedAt: false 
+    updatedAt: false,
+    //Definición de índices únicos compuestos**
+    indexes: [
+      {
+        unique: true,
+        fields: ['fecha_hora_cita', 'administrador_id'],
+        name: 'unique_cita_admin_time'
+      },
+      {
+        unique: true,
+        fields: ['fecha_hora_cita', 'paciente_id'],
+        name: 'unique_cita_patient_time'
+      }
+    ]
   });
   return Cita;
 };

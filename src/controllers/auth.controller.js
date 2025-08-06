@@ -1,190 +1,277 @@
-// Importaciones de módulos y utilidades
-const db = require("../../models/index"); // Acceso a los modelos de Sequelize
-const Administrador = db.Administrador; // Modelo del Administrador
-const { hashPassword, comparePassword } = require("../utils/hash"); // Utilidades para hashing de contraseñas
-const transporter = require("../config/nodemailer"); // Configuración de Nodemailer para envío de correos
-const crypto = require("crypto"); // Módulo nativo de Node.js para criptografía
+// src/controllers/auth.controller.js
+const db = require("../../models/index");
+const Administrador = db.Administrador;
+const { comparePassword } = require("../utils/hash");
+const transporter = require("../config/nodemailer");
+const crypto = require("crypto");
 const {
   generateAccessToken,
   generateRefreshToken,
   verifyRefreshToken,
-} = require("../utils/jwt"); // Utilidades para gestión de JWT
+} = require("../utils/jwt");
 const {
   loginSchema,
   administradorSchema,
   forgotPasswordSchema,
   changePasswordSchema,
-} = require("../utils/validation"); // Esquemas de validación con Zod
+  updateProfileSchema,
+  updatePasswordSchema,
+  updateNotificationPreferencesSchema,
+} = require("../utils/validation");
+const multer = require("multer");
+const supabase = require("../config/supabase");
+const {
+  NotFoundError,
+  BadRequestError,
+  ConflictError,
+  UnauthorizedError,
+  CustomError,
+} = require("../utils/customErrors");
 
-// Constante para la expiración del Refresh Token en días, obtenida de variables de entorno.
+// Constantes
 const REFRESH_TOKEN_COOKIE_EXPIRATION_DAYS = parseInt(
   process.env.REFRESH_TOKEN_EXPIRATION_DAYS || "7",
   10
 );
+const SUPABASE_PROFILE_BUCKET =
+  process.env.SUPABASE_PROFILE_BUCKET || "profile-pictures";
+
+// Configuración de Multer para almacenamiento en memoria
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    const filetypes = /jpeg|jpg|png|gif/;
+    const mimetype = filetypes.test(file.mimetype);
+    const extname = filetypes.test(file.originalname.toLowerCase());
+
+    if (mimetype && extname) {
+      return cb(null, true);
+    }
+    cb(new CustomError("Solo se permiten imágenes (jpeg, jpg, png, gif)", 400));
+  },
+});
+
+/**
+ * Función auxiliar para subir un archivo a Supabase Storage.
+ * @param {Buffer} buffer - El buffer del archivo a subir.
+ * @param {string} mimetype - El tipo MIME del archivo.
+ * @param {string} originalname - El nombre original del archivo.
+ * @param {string} folderPath - La ruta de la carpeta dentro del bucket.
+ * @returns {Promise<string>} La URL pública del archivo subido.
+ */
+const uploadFileToSupabase = async (
+  buffer,
+  mimetype,
+  originalname,
+  folderPath
+) => {
+  const fileExtension = originalname.split(".").pop();
+  const filename = `${folderPath}/${Date.now()}-${crypto
+    .randomBytes(8)
+    .toString("hex")}.${fileExtension}`;
+
+  const { error } = await supabase.storage
+    .from(SUPABASE_PROFILE_BUCKET)
+    .upload(filename, buffer, {
+      contentType: mimetype,
+      upsert: false,
+    });
+
+  if (error) {
+    console.error("Error al subir a Supabase Storage:", error);
+    throw new CustomError("Fallo al subir la imagen de perfil.", 500);
+  }
+
+  const { data: publicUrlData } = supabase.storage
+    .from(SUPABASE_PROFILE_BUCKET)
+    .getPublicUrl(filename);
+
+  if (!publicUrlData || !publicUrlData.publicUrl) {
+    throw new CustomError(
+      "No se pudo obtener la URL pública del archivo.",
+      500
+    );
+  }
+
+  return publicUrlData.publicUrl;
+};
+
+/**
+ * Función auxiliar para eliminar un archivo de Supabase Storage.
+ * @param {string} fileUrl - La URL completa del archivo a eliminar.
+ * @returns {Promise<void>}
+ */
+const deleteFileFromSupabase = async (fileUrl) => {
+  const pathSegments = fileUrl.split("/public/");
+  if (pathSegments.length < 2) {
+    console.warn("URL de archivo inválida para Supabase Storage:", fileUrl);
+    return;
+  }
+  const filePath = pathSegments[1].substring(
+    SUPABASE_PROFILE_BUCKET.length + 1
+  );
+
+  const { error } = await supabase.storage
+    .from(SUPABASE_PROFILE_BUCKET)
+    .remove([filePath]);
+
+  if (error) {
+    console.error(
+      `Error al eliminar el archivo ${filePath} de Supabase Storage:`,
+      error
+    );
+  } else {
+    console.log(`Archivo ${filePath} eliminado de Supabase Storage.`);
+  }
+};
+
+/**
+ * Establece el refresh token en una cookie.
+ * @param {Object} res - Objeto de respuesta de Express.
+ * @param {string} refreshToken - El token a establecer.
+ */
+const setRefreshTokenCookie = (res, refreshToken) => {
+  res.cookie("refreshToken", refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    maxAge: REFRESH_TOKEN_COOKIE_EXPIRATION_DAYS * 24 * 60 * 60 * 1000,
+  });
+};
+
+/**
+ * Cierra la sesión de un administrador.
+ * Elimina el refresh token de las cookies del cliente.
+ */
+const clearRefreshTokenCookie = (res) => {
+  res.clearCookie("refreshToken", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+  });
+};
 
 /**
  * Registra un nuevo administrador en el sistema.
- * Valida los datos de entrada, hashea la contraseña y crea el registro en la base de datos.
- * @param {Object} req - Objeto de solicitud de Express.
- * @param {Object} res - Objeto de respuesta de Express.
- * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const registerAdmin = async (req, res, next) => {
   try {
-    // Valida los datos del cuerpo de la solicitud usando el esquema `administradorSchema` de Zod.
     const validatedData = administradorSchema.parse(req.body);
-    const { nombre, apellido, email, password_hash } = validatedData;
+    // La contraseña se hashea automáticamente con el hook beforeCreate del modelo.
+    const newAdmin = await Administrador.create(validatedData);
 
-    // Hashea la contraseña antes de almacenarla en la base de datos por seguridad.
-    const hashedPassword = await hashPassword(password_hash);
-
-    // Crea un nuevo registro de administrador.
-    const newAdmin = await Administrador.create({
-      nombre,
-      apellido,
-      email,
-      password_hash: hashedPassword,
-    });
-
-    // Envía una respuesta de éxito con el nuevo administrador (sin la contraseña hasheada).
     res.status(201).json({
       message: "Administrador registrado exitosamente",
-      user: newAdmin, // Considera enviar solo datos públicos del usuario.
+      user: {
+        id: newAdmin.administrador_id,
+        nombre: newAdmin.nombre,
+        apellido: newAdmin.apellido,
+        email: newAdmin.email,
+        role: newAdmin.role,
+      },
     });
   } catch (error) {
-    // Pasa cualquier error (incluyendo ZodError o SequelizeUniqueConstraintError)
-    // al middleware centralizado de manejo de errores.
     next(error);
   }
 };
 
 /**
  * Autentica a un administrador.
- * Verifica las credenciales, genera tokens de acceso y refresco, y establece el refresh token en una cookie.
- * @param {Object} req - Objeto de solicitud de Express.
- * @param {Object} res - Objeto de respuesta de Express.
- * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const loginAdmin = async (req, res, next) => {
   try {
-    // Valida los datos de inicio de sesión.
     const validatedData = loginSchema.parse(req.body);
     const { email, password_hash } = validatedData;
 
-    // Busca al administrador por email.
     const admin = await Administrador.findOne({ where: { email } });
 
-    // Verifica si el administrador existe y si la contraseña es correcta.
     if (
       !admin ||
       !(await comparePassword(password_hash, admin.password_hash))
     ) {
-      // Si las credenciales son inválidas, devuelve un error 401.
-      return res.status(401).json({ message: "Credenciales inválidas." });
+      throw new UnauthorizedError("Credenciales inválidas.");
     }
 
-    // Genera un token de acceso (AccessToken) que expira rápidamente.
     const accessToken = generateAccessToken({
       id: admin.administrador_id,
       email: admin.email,
+      role: admin.role,
     });
-
-    // Genera un token de refresco (RefreshToken) que tiene una vida útil más larga.
     const refreshToken = generateRefreshToken(admin.administrador_id);
 
-    // Establece el Refresh Token como una cookie HTTP-only y segura.
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true, // No accesible por JavaScript del lado del cliente.
-      secure: process.env.NODE_ENV === "production", // Solo se envía sobre HTTPS en producción.
-      sameSite: "strict", // Protege contra ataques CSRF.
-      maxAge: REFRESH_TOKEN_COOKIE_EXPIRATION_DAYS * 24 * 60 * 60 * 1000, // Duración de la cookie.
-    });
+    setRefreshTokenCookie(res, refreshToken);
 
-    // Envía una respuesta de éxito con el Access Token y los datos del usuario.
     res.status(200).json({
       message: "Inicio de sesión exitoso",
       accessToken,
       user: {
         id: admin.administrador_id,
         nombre: admin.nombre,
+        apellido: admin.apellido,
         email: admin.email,
+        role: admin.role,
+        profilePictureUrl: admin.profile_picture_url,
+        receive_email_notifications: admin.receive_email_notifications,
+        receive_sms_notifications: admin.receive_sms_notifications,
       },
     });
   } catch (error) {
-    // Pasa cualquier error al middleware centralizado de manejo de errores.
     next(error);
   }
 };
 
 /**
  * Cierra la sesión de un administrador.
- * Elimina el refresh token de las cookies del cliente.
- * @param {Object} req - Objeto de solicitud de Express.
- * @param {Object} res - Objeto de respuesta de Express.
- * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
-const logoutAdmin = async (req, res, next) => {
-  try {
-    // Limpia la cookie del refresh token.
-    res.clearCookie("refreshToken", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-    });
-
-    res.status(200).json({ message: "Sesión cerrada exitosamente." });
-  } catch (error) {
-    // Pasa cualquier error al middleware centralizado de manejo de errores.
-    next(error);
-  }
+const logoutAdmin = (req, res) => {
+  clearRefreshTokenCookie(res);
+  res.status(200).json({ message: "Sesión cerrada exitosamente." });
 };
 
 /**
  * Refresca el token de acceso utilizando un refresh token existente.
- * Valida el refresh token, genera un nuevo access token y un nuevo refresh token.
- * @param {Object} req - Objeto de solicitud de Express.
- * @param {Object} res - Objeto de respuesta de Express.
- * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const refreshAccessToken = async (req, res, next) => {
   try {
-    const oldRefreshToken = req.cookies.refreshToken; // Obtiene el refresh token de las cookies.
-
-    // Si no hay refresh token, devuelve un error 401.
+    const oldRefreshToken = req.cookies.refreshToken;
     if (!oldRefreshToken) {
-      return res
-        .status(401)
-        .json({ message: "Refresh Token no encontrado en las cookies." });
+      throw new UnauthorizedError(
+        "Refresh Token no encontrado en las cookies."
+      );
     }
 
-    // Verifica y decodifica el refresh token.
     const decoded = verifyRefreshToken(oldRefreshToken);
-    // Si el token es inválido o no contiene un ID, limpia la cookie y devuelve un error 401.
     if (!decoded || !decoded.id) {
-      res.clearCookie("refreshToken", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-      });
-      return res
-        .status(401)
-        .json({ message: "Refresh Token inválido o expirado." });
+      clearRefreshTokenCookie(res);
+      throw new UnauthorizedError("Refresh Token inválido o expirado.");
     }
 
-    const administradorId = decoded.id;
-
-    // Genera un nuevo Access Token.
-    const newAccessToken = generateAccessToken({ id: administradorId });
-
-    // Genera un nuevo Refresh Token para rotación de tokens (mejora la seguridad).
-    const newRefreshToken = generateRefreshToken(administradorId);
-    // Establece el nuevo Refresh Token en una cookie.
-    res.cookie("refreshToken", newRefreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      maxAge: REFRESH_TOKEN_COOKIE_EXPIRATION_DAYS * 24 * 60 * 60 * 1000,
+    const admin = await Administrador.findByPk(decoded.id, {
+      attributes: [
+        "administrador_id",
+        "email",
+        "role",
+        "profile_picture_url",
+        "receive_email_notifications",
+        "receive_sms_notifications",
+      ],
     });
+
+    if (!admin) {
+      clearRefreshTokenCookie(res);
+      throw new UnauthorizedError(
+        "Usuario asociado al Refresh Token no encontrado."
+      );
+    }
+
+    const newAccessToken = generateAccessToken({
+      id: admin.administrador_id,
+      email: admin.email,
+      role: admin.role,
+    });
+    const newRefreshToken = generateRefreshToken(admin.administrador_id);
+    setRefreshTokenCookie(res, newRefreshToken);
 
     res.status(200).json({
       message: "Token de acceso refrescado exitosamente",
@@ -192,177 +279,300 @@ const refreshAccessToken = async (req, res, next) => {
     });
   } catch (error) {
     console.error("Error al refrescar el token:", error.message);
-    // En caso de error, limpia la cookie del refresh token (por si acaso) y devuelve un error 401.
-    res.clearCookie("refreshToken", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-    });
-    // Pasa el error al middleware centralizado de manejo de errores.
-    // Se puede crear un error personalizado aquí si se necesita un mensaje más específico en el toast.
-    next(error);
+    clearRefreshTokenCookie(res);
+    // Error genérico para no dar pistas sobre la causa del fallo.
+    next(
+      new UnauthorizedError("No se pudo refrescar el token de autenticación.")
+    );
   }
 };
 
 /**
  * Obtiene la información del usuario autenticado.
- * Esta función asume que `req.user` ya ha sido poblado por el middleware de autenticación (`protect`).
- * @param {Object} req - Objeto de solicitud de Express.
- * @param {Object} res - Objeto de respuesta de Express.
- * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const getAuthenticatedUser = async (req, res, next) => {
   try {
-    // `req.user` es establecido por el middleware `protect` si el token es válido.
-    if (req.user) {
-      return res.status(200).json({
-        id: req.user.administrador_id, // Asegurarse de que el ID se envía si es necesario en el frontend.
-        email: req.user.email,
-        nombre: req.user.nombre || "Usuario", // Fallback si el nombre no está definido.
-        apellido: req.user.apellido || "", // Incluir apellido si es relevante.
-      });
-    } else {
-      // Si `req.user` no está presente, significa que el middleware `protect` no autenticó al usuario.
-      return res
-        .status(401)
-        .json({
-          message: "No se encontró información de usuario autenticado.",
-        });
+    const administradorId = req.user?.administrador_id;
+    if (!administradorId) {
+      throw new UnauthorizedError("No se encontró ID de usuario autenticado.");
     }
+
+    const admin = await Administrador.findByPk(administradorId, {
+      attributes: [
+        "administrador_id",
+        "nombre",
+        "apellido",
+        "email",
+        "role",
+        "profile_picture_url",
+        "receive_email_notifications",
+        "receive_sms_notifications",
+      ],
+    });
+
+    if (!admin) {
+      throw new NotFoundError(
+        "Administrador no encontrado en la base de datos."
+      );
+    }
+
+    return res.status(200).json({
+      id: admin.administrador_id,
+      email: admin.email,
+      nombre: admin.nombre,
+      apellido: admin.apellido,
+      role: admin.role,
+      profilePictureUrl: admin.profile_picture_url,
+      receive_email_notifications: admin.receive_email_notifications,
+      receive_sms_notifications: admin.receive_sms_notifications,
+    });
   } catch (error) {
-    next(error); // Pasa cualquier error al middleware centralizado de manejo de errores.
+    next(error);
   }
 };
 
 /**
  * Maneja la solicitud de restablecimiento de contraseña.
- * Genera un token de restablecimiento, lo guarda en la DB y envía un email al usuario.
- * @param {Object} req - Objeto de solicitud de Express.
- * @param {Object} res - Objeto de respuesta de Express.
- * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const forgotPassword = async (req, res, next) => {
-  let administrador; // Se declara aquí para que sea accesible en el bloque catch.
+  let administrador;
   try {
-    // Valida el email de la solicitud.
-    const validatedData = forgotPasswordSchema.parse(req.body);
-    const { email } = validatedData;
-
-    // Busca al administrador por email.
+    const { email } = forgotPasswordSchema.parse(req.body);
     administrador = await Administrador.findOne({ where: { email } });
 
-    // Es una buena práctica de seguridad no revelar si el email existe o no.
-    // Siempre se envía el mismo mensaje para evitar la enumeración de usuarios.
-    if (!administrador) {
-      return res.status(200).json({
-        message:
-          "Si el correo electrónico existe, se ha enviado un enlace para restablecer la contraseña.",
+
+    if (administrador) {
+      const resetToken = administrador.getResetPasswordToken();
+      await administrador.save({
+        fields: ["resetPasswordToken", "resetPasswordExpires"],
       });
+
+      const resetUrl = `${process.env.FRONTEND_URL}/restablecer-contrasena/${resetToken}`;
+
+      const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: administrador.email,
+        subject: "Restablecimiento de Contraseña",
+        html: `
+          <p>Has solicitado restablecer tu contraseña.</p>
+          <p>Por favor, haz clic en el siguiente enlace para restablecer tu contraseña:</p>
+          <p><a href="${resetUrl}">Restablecer Contraseña</a></p>
+          <p>Este enlace expirará en 1 hora.</p>
+          <p>Si no solicitaste un restablecimiento de contraseña, ignora este correo electrónico.</p>
+        `,
+      };
+      await transporter.sendMail(mailOptions);
     }
-
-    // Genera un token de restablecimiento de contraseña (método definido en el modelo Administrador).
-    const resetToken = administrador.getResetPasswordToken();
-    // Guarda el token hasheado y su fecha de expiración en la base de datos.
-    await administrador.save({
-      fields: ["resetPasswordToken", "resetPasswordExpires"],
-    });
-
-    // Construye la URL de restablecimiento que se enviará al usuario.
-    const resetUrl = `${process.env.FRONTEND_URL}/restablecer-contrasena/${resetToken}`;
-
-    // Define las opciones del correo electrónico.
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: administrador.email,
-      subject: "Restablecimiento de Contraseña",
-      html: `
-        <p>Has solicitado restablecer tu contraseña.</p>
-        <p>Por favor, haz clic en el siguiente enlace para restablecer tu contraseña:</p>
-        <p><a href="${resetUrl}">Restablecer Contraseña</a></p>
-        <p>Este enlace expirará en 1 hora.</p>
-        <p>Si no solicitaste un restablecimiento de contraseña, ignora este correo electrónico.</p>
-      `,
-    };
-
-    // Envía el correo electrónico.
-    await transporter.sendMail(mailOptions);
 
     res.status(200).json({
       message:
-        "Si el correo electrónico existe, se ha enviado un enlace para restablecer la contraseña.",
+        "Si el correo electrónico existe, se ha enviado un enlace para restablecer la contraseña.", // Se responde de manera genérica por seguridad.
     });
   } catch (error) {
-    console.error("Error al solicitar restablecimiento de contraseña:", error);
-    // En caso de error en el envío del correo o guardado, limpia los tokens para evitar tokens huérfanos.
+    // Si falla el envío de correo, revierte el token.
     if (administrador) {
       administrador.resetPasswordToken = null;
       administrador.resetPasswordExpires = null;
-      await administrador.save(); // Guarda los cambios para limpiar los tokens.
+      await administrador.save();
     }
-    next(error); // Pasa el error al middleware centralizado.
+    next(error);
   }
 };
 
 /**
- * Restablece la contraseña de un administrador utilizando un token de restablecimiento.
- * @param {Object} req - Objeto de solicitud de Express (req.params.token contiene el token).
- * @param {Object} res - Objeto de respuesta de Express.
- * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
+ * Restablece la contraseña de un administrador utilizando un token.
  */
 const resetPassword = async (req, res, next) => {
   try {
     const { token } = req.params;
-    // Valida la nueva contraseña.
-    const validatedData = changePasswordSchema.parse(req.body);
-    const { password_hash } = validatedData;
+    const { password_hash } = changePasswordSchema.parse(req.body);
 
-    // Hashea el token recibido para compararlo con el hasheado en la base de datos.
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
-    // Busca al administrador por el token hasheado y verifica que no haya expirado.
     const administrador = await Administrador.findOne({
       where: {
         resetPasswordToken: hashedToken,
-        resetPasswordExpires: { [require("sequelize").Op.gt]: Date.now() }, // Verifica que la fecha de expiración sea mayor que la actual.
+        resetPasswordExpires: { [db.Sequelize.Op.gt]: Date.now() },
       },
     });
 
-    // Si el administrador no se encuentra o el token ha expirado, devuelve un error 400.
     if (!administrador) {
-      return res
-        .status(400)
-        .json({ message: "Token de restablecimiento inválido o expirado." });
+      throw new BadRequestError(
+        "Token de restablecimiento inválido o expirado."
+      );
     }
 
-    // Actualiza la contraseña del administrador y limpia los campos del token de restablecimiento.
-    administrador.password_hash = password_hash; // La validación Zod ya asegura que es una contraseña válida.
+    // La contraseña se hashea automáticamente en el hook beforeUpdate.
+    administrador.password_hash = password_hash;
     administrador.resetPasswordToken = null;
     administrador.resetPasswordExpires = null;
-    await administrador.save(); // Guarda los cambios.
+    await administrador.save();
 
     res.status(200).json({ message: "Contraseña restablecida exitosamente." });
   } catch (error) {
-    console.error("Error al restablecer contraseña:", error);
-    next(error); // Pasa cualquier error al middleware centralizado.
+    next(error);
   }
 };
 
 /**
  * Obtiene todos los administradores registrados (solo datos públicos).
- * @param {Object} req - Objeto de solicitud de Express.
- * @param {Object} res - Objeto de respuesta de Express.
- * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const getAllAdministrator = async (req, res, next) => {
   try {
-    // Busca todos los administradores, seleccionando solo atributos seguros y públicos.
     const admins = await Administrador.findAll({
-      attributes: ["administrador_id", "nombre", "apellido", "email"],
+      attributes: [
+        "administrador_id",
+        "nombre",
+        "apellido",
+        "email",
+        "role",
+        "profile_picture_url",
+      ],
     });
     res.status(200).json(admins);
   } catch (error) {
-    console.error("Error al obtener administradores:", error);
-    next(error); // Pasa cualquier error al middleware centralizado.
+    next(error);
+  }
+};
+
+/**
+ * Actualiza la información del perfil de un administrador autenticado, incluyendo la foto de perfil.
+ */
+const updateAdminProfile = async (req, res, next) => {
+  try {
+    const administradorId = req.user.administrador_id;
+    const { nombre, apellido, email } = req.body;
+    const profile_picture_url_from_body = req.body.profile_picture_url;
+
+    const admin = await Administrador.findByPk(administradorId);
+    if (!admin) {
+      throw new NotFoundError("Administrador no encontrado.");
+    }
+
+    const validatedData = updateProfileSchema.parse({
+      nombre,
+      apellido,
+      email,
+    });
+
+    // Validar unicidad del email si se está actualizando.
+    if (validatedData.email && validatedData.email !== admin.email) {
+      const existingAdmin = await Administrador.findOne({
+        where: {
+          email: validatedData.email,
+          administrador_id: { [db.Sequelize.Op.ne]: administradorId },
+        },
+      });
+      if (existingAdmin) {
+        throw new ConflictError(
+          "Este email ya está registrado por otro administrador."
+        );
+      }
+    }
+
+    let newProfilePictureUrl = admin.profile_picture_url;
+
+    if (req.file) {
+      // Sube la nueva imagen y elimina la antigua si existe.
+      if (admin.profile_picture_url) {
+        await deleteFileFromSupabase(admin.profile_picture_url);
+      }
+      newProfilePictureUrl = await uploadFileToSupabase(
+        req.file.buffer,
+        req.file.mimetype,
+        req.file.originalname,
+        `admin_profiles/${administradorId}`
+      );
+    } else if (
+      profile_picture_url_from_body === "null" &&
+      admin.profile_picture_url
+    ) {
+      // Si el frontend pide explícitamente borrar la imagen.
+      await deleteFileFromSupabase(admin.profile_picture_url);
+      newProfilePictureUrl = null;
+    }
+
+    await admin.update({
+      ...validatedData,
+      profile_picture_url: newProfilePictureUrl,
+    });
+
+    res.status(200).json({
+      message: "Perfil actualizado exitosamente",
+      user: {
+        id: admin.administrador_id,
+        nombre: admin.nombre,
+        apellido: admin.apellido,
+        email: admin.email,
+        role: admin.role,
+        profilePictureUrl: newProfilePictureUrl,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Permite a un administrador autenticado cambiar su contraseña.
+ */
+const updateAdminPassword = async (req, res, next) => {
+  try {
+    const administradorId = req.user.administrador_id;
+    const { current_password, new_password } = updatePasswordSchema.parse(
+      req.body
+    );
+
+    const admin = await Administrador.findByPk(administradorId);
+    if (!admin) {
+      throw new NotFoundError("Administrador no encontrado.");
+    }
+
+    if (!(await comparePassword(current_password, admin.password_hash))) {
+      throw new UnauthorizedError("La contraseña actual es incorrecta.");
+    }
+
+    // La contraseña se hashea automáticamente en el hook beforeUpdate.
+    admin.password_hash = new_password;
+    await admin.save();
+
+    res.status(200).json({ message: "Contraseña actualizada exitosamente." });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Actualiza las preferencias de notificación de un administrador autenticado.
+ */
+const updateAdminNotificationPreferences = async (req, res, next) => {
+  try {
+    const administradorId = req.user.administrador_id;
+    const validatedData = updateNotificationPreferencesSchema.parse(req.body);
+
+    const admin = await Administrador.findByPk(administradorId, {
+      attributes: [
+        "administrador_id",
+        "receive_email_notifications",
+        "receive_sms_notifications",
+      ],
+    });
+    if (!admin) {
+      throw new NotFoundError("Administrador no encontrado.");
+    }
+
+    await admin.update(validatedData);
+
+    res.status(200).json({
+      message: "Preferencias de notificación actualizadas exitosamente.",
+      user: {
+        id: admin.administrador_id,
+        receive_email_notifications: admin.receive_email_notifications,
+        receive_sms_notifications: admin.receive_sms_notifications,
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 };
 
@@ -375,4 +585,8 @@ module.exports = {
   forgotPassword,
   resetPassword,
   getAllAdministrator,
+  updateAdminProfile,
+  updateAdminPassword,
+  updateAdminNotificationPreferences,
+  upload,
 };
