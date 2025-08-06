@@ -35,7 +35,7 @@ router.put('/plan-tratamiento/:planId', protect, clinicalHistoryController.updat
 router.delete('/plan-tratamiento/:planId', protect, clinicalHistoryController.deletePlanTratamiento);
 
 // RUTAS PARA PRUEBAS INICIALES
-router.post('/pruebas-iniciales', protect, clinicalHistoryController.createPruebasIniciales);
+router.post('/:historiaClinicaId/pruebas-iniciales', protect, clinicalHistoryController.createPruebasIniciales);
 router.get('/pruebas-iniciales/paciente/:pacienteId', protect, clinicalHistoryController.getPruebasInicialesByPacienteId);
 router.put('/pruebas-iniciales/:pruebaId', protect, clinicalHistoryController.updatePruebasIniciales);
 router.delete('/pruebas-iniciales/:pruebaId', protect, clinicalHistoryController.deletePruebasIniciales);

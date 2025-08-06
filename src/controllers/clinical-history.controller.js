@@ -56,19 +56,10 @@ class BaseController {
 class ClinicalHistoryController {
   constructor() {
     this.anamnesis = new BaseController(Anamnesis, "Anamnesis");
-    this.exploracionFisica = new BaseController(
-      ExploracionFisica,
-      "Exploración física"
-    );
+    this.exploracionFisica = new BaseController(ExploracionFisica,"Exploración física");
     this.diagnostico = new BaseController(Diagnostico, "Diagnóstico");
-    this.planTratamiento = new BaseController(
-      PlanTratamiento,
-      "Plan de tratamiento"
-    );
-    this.PruebasIniciales = new BaseController(
-      PruebasIniciales,
-      "Pruebas iniciales"
-    );
+    this.planTratamiento = new BaseController(PlanTratamiento,"Plan de tratamiento");
+    this.PruebasIniciales = new BaseController(PruebasIniciales,"Pruebas iniciales");
   }
 
   // --- Métodos de la Historia Clínica ---
@@ -569,7 +560,7 @@ class ClinicalHistoryController {
       const nuevaPrueba = await PruebasIniciales.create(validatedData);
       res.status(201).json(nuevaPrueba);
     } catch (error) {
-      if (error instanceof z.ZodError) {
+      if (error.name === "ZodError") {
         return next(new ValidationError("Error de validación", error.errors));
       }
       next(error);
@@ -684,33 +675,28 @@ module.exports = {
   getHistoriaClinicaByPacienteRut: controller.getHistoriaClinicaByPacienteRut,
 
   createAnamnesis: controller.createAnamnesis.bind(controller),
-  getAnamnesisByHistoriaClinicaId:
-    controller.getAnamnesisByHistoriaClinicaId.bind(controller),
+  getAnamnesisByHistoriaClinicaId:controller.getAnamnesisByHistoriaClinicaId.bind(controller),
   updateAnamnesis: controller.updateAnamnesis.bind(controller),
   deleteAnamnesis: controller.deleteAnamnesis.bind(controller),
 
   createExploracionFisica: controller.createExploracionFisica.bind(controller),
-  getExploracionFisicaByHistoriaClinicaId:
-    controller.getExploracionFisicaByHistoriaClinicaId.bind(controller),
+  getExploracionFisicaByHistoriaClinicaId:controller.getExploracionFisicaByHistoriaClinicaId.bind(controller),
   updateExploracionFisica: controller.updateExploracionFisica.bind(controller),
   deleteExploracionFisica: controller.deleteExploracionFisica.bind(controller),
 
   createDiagnostico: controller.createDiagnostico.bind(controller),
-  getDiagnosticosByHistoriaClinicaId:
-    controller.getDiagnosticosByHistoriaClinicaId.bind(controller),
+  getDiagnosticosByHistoriaClinicaId:controller.getDiagnosticosByHistoriaClinicaId.bind(controller),
   updateDiagnostico: controller.updateDiagnostico.bind(controller),
   deleteDiagnostico: controller.deleteDiagnostico.bind(controller),
 
   createPlanTratamiento: controller.createPlanTratamiento.bind(controller),
-  getPlanesTratamientoByHistoriaClinica:
-    controller.getPlanesTratamientoByHistoriaClinica.bind(controller),
+  getPlanesTratamientoByHistoriaClinica:controller.getPlanesTratamientoByHistoriaClinica.bind(controller),
   getPlanTratamientoById: controller.getPlanTratamientoById.bind(controller),
   updatePlanTratamiento: controller.updatePlanTratamiento.bind(controller),
   deletePlanTratamiento: controller.deletePlanTratamiento.bind(controller),
 
   createPruebasIniciales: controller.createPruebasIniciales.bind(controller),
-  getPruebasInicialesByPacienteId:
-    controller.getPruebasInicialesByPacienteId.bind(controller),
+  getPruebasInicialesByPacienteId:controller.getPruebasInicialesByPacienteId.bind(controller),
   updatePruebasIniciales: controller.updatePruebasIniciales.bind(controller),
   deletePruebasIniciales: controller.deletePruebasIniciales.bind(controller),
 };

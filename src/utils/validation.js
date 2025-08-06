@@ -291,7 +291,6 @@ const createDiagnosticoSchema = historiaClinicaBaseSchema.extend({
 const updateDiagnosticoSchema = createDiagnosticoSchema.partial();
 
 const createPruebasInicialesSchema = z.object({
-  paciente_id: z.number().int().positive(),
   fecha_registro: z.coerce.date().optional(),
   peso: z.number().min(0).max(999.99).optional(),
   altura: z.number().min(0).max(9.99).optional(),
