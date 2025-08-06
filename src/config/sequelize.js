@@ -5,7 +5,6 @@ require("dotenv").config();
 const env = process.env.NODE_ENV || "development";
 const config = require("../../config/config.js")[env];
 
-// Inicializa Sequelize usando la configuración
 const sequelize = new Sequelize(
   config.database,
   config.username,
@@ -20,8 +19,6 @@ const sequelize = new Sequelize(
   }
 );
 
-// Importar los modelos a través del index.js generado por sequelize-cli
-// Este `db` contendrá sequelize, Sequelize, y todos tus modelos (db.Administrador, db.Paciente, etc.)
 const db = require("../../models");
 
 // Autenticar la conexión
@@ -31,7 +28,6 @@ async function connectDB() {
     console.log(
       "Conexión a la base de datos establecida correctamente con Sequelize."
     );
-
     // **IMPORTANTE: Elimina sequelize.sync({ force: true }); de aquí**
     // Si estás usando sequelize-cli para migraciones, la gestión del esquema
     // se hará con `npx sequelize-cli db:migrate`.
@@ -46,4 +42,4 @@ async function connectDB() {
   }
 }
 
-module.exports = { sequelize: db.sequelize, connectDB, db };
+module.exports = { connectDB, db };

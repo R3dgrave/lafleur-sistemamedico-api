@@ -4,7 +4,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const apiRoutes = require("./routes/index");
 const { apiLimiter, loginLimiter } = require("./middlewares/ratelimit");
-const errorHandler = require("./middlewares/error");
+const errorHandler = require("./middlewares/errorHandler");
 const cookieParser = require("cookie-parser");
 require("dotenv").config();
 

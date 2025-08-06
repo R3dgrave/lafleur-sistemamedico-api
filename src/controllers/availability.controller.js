@@ -1,3 +1,4 @@
+// src/controllers/availability.controller.js
 const {
   HorarioDisponible,
   ExcepcionDisponibilidad,
@@ -10,15 +11,18 @@ const {
   horarioDisponibleSchema,
   excepcionDisponibilidadSchema,
 } = require("../utils/validation");
-
-const { DateTime, Settings } = require("luxon");
-const CHILE_TIMEZONE = "America/Santiago"; // Define la zona horaria de Chile para consistencia.
+const {
+  NotFoundError,
+  ConflictError,
+  BadRequestError,
+} = require("../utils/customErrors");
+const { DateTime } = require("luxon");
+const CHILE_TIMEZONE = "America/Santiago";
+const { ZodError } = require("zod");
 
 /**
  * Genera una lista de franjas horarias potenciales basadas en un rango de tiempo,
  * la duración de la cita y el tiempo de buffer.
- * Cada franja incluye la hora de inicio y fin de la cita reservable,
- * y considera el buffer para la siguiente franja.
  * @param {DateTime} startDateTimeLocal - Objeto Luxon DateTime del inicio del horario disponible (en zona horaria local).
  * @param {DateTime} endDateTimeLocal - Objeto Luxon DateTime del fin del horario disponible (en zona horaria local).
  * @param {number} durationMinutes - Duración de cada cita en minutos.
@@ -32,28 +36,21 @@ const generateTimeSlots = (
   bufferMinutes
 ) => {
   const slots = [];
-  // Inicializa el tiempo actual al inicio del horario disponible, con precisión de minuto.
   let currentTime = startDateTimeLocal.startOf("minute");
 
-  // Itera para generar franjas hasta que no quepan más.
   while (true) {
-    // Calcula el final potencial de la cita (solo la duración reservable).
     const potentialSlotEnd = currentTime.plus({ minutes: durationMinutes });
-    // Calcula el final del bloque total (cita + buffer). Este es el punto de inicio de la siguiente franja.
     const totalSlotBlockEnd = potentialSlotEnd.plus({ minutes: bufferMinutes });
 
-    // Si el bloque total (cita + buffer) excede el horario disponible, no se pueden añadir más franjas completas.
     if (totalSlotBlockEnd > endDateTimeLocal) {
       break;
     }
 
-    // Añade la franja al array (solo la duración reservable, convertida a UTC ISO).
     slots.push({
       start: currentTime.setZone("utc").toISO(),
       end: potentialSlotEnd.setZone("utc").toISO(),
     });
 
-    // Mueve el tiempo actual al final del bloque total para la siguiente iteración.
     currentTime = totalSlotBlockEnd;
   }
   return slots;
@@ -61,52 +58,177 @@ const generateTimeSlots = (
 
 /**
  * Crea un nuevo horario disponible para un administrador.
+ * Se ha movido la validación del esquema aquí para asegurar la consistencia.
  * @param {Object} req - Objeto de solicitud de Express.
  * @param {Object} res - Objeto de respuesta de Express.
  * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const createHorarioDisponible = async (req, res, next) => {
   try {
-    // Valida los datos de entrada usando el esquema Zod.
+    const administradorId = req.user.administrador_id;
     const validatedData = horarioDisponibleSchema.parse(req.body);
-    // Crea el nuevo horario disponible en la base de datos.
-    const newHorario = await HorarioDisponible.create(validatedData);
-    res
-      .status(201)
-      .json({ message: "Horario disponible creado.", horario: newHorario });
-  } catch (error) {
-    // Manejo específico para errores de unicidad de Sequelize.
-    if (error.name === "SequelizeUniqueConstraintError") {
-      return res.status(409).json({
-        message: "Este horario ya existe para este día y administrador.",
-      });
+    const { dia_semana, hora_inicio, hora_fin } = validatedData;
+
+    // Verificar si ya existe un horario para este administrador y día de la semana.
+    const existingHorario = await HorarioDisponible.findOne({
+      where: {
+        administrador_id: administradorId,
+        dia_semana: dia_semana,
+      },
+    });
+
+    if (existingHorario) {
+      throw new ConflictError(
+        "Ya existe un horario configurado para este día de la semana. Por favor, edita el horario existente en lugar de crear uno nuevo."
+      );
     }
-    // Pasa cualquier otro error al siguiente middleware de errores.
+
+    const newHorario = await HorarioDisponible.create({
+      administrador_id: administradorId,
+      dia_semana,
+      hora_inicio,
+      hora_fin,
+    });
+
+    res.status(201).json({
+      message: "Horario disponible creado exitosamente.",
+      horario: newHorario,
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return next(
+        new BadRequestError("Datos de entrada inválidos.", error.errors)
+      );
+    }
     next(error);
   }
 };
 
 /**
- * Obtiene todos los horarios disponibles registrados.
- * Incluye información básica del administrador asociado.
+ * Obtiene todos los horarios disponibles para el administrador autenticado.
  * @param {Object} req - Objeto de solicitud de Express.
  * @param {Object} res - Objeto de respuesta de Express.
  * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const getAllHorariosDisponibles = async (req, res, next) => {
   try {
-    // Busca todos los horarios disponibles, incluyendo el nombre y apellido del administrador.
+    const administradorId = req.user.administrador_id;
+
     const horarios = await HorarioDisponible.findAll({
-      include: [{ model: Administrador, attributes: ["nombre", "apellido"] }],
+      where: { administrador_id: administradorId },
+      attributes: [
+        "horario_disponible_id",
+        "administrador_id",
+        "dia_semana",
+        "hora_inicio",
+        "hora_fin",
+      ],
+      include: [
+        {
+          model: Administrador,
+          attributes: ["administrador_id", "nombre", "apellido"],
+        },
+      ],
       order: [
-        ["administrador_id", "ASC"], // Ordena por administrador.
-        ["dia_semana", "ASC"], // Luego por día de la semana.
-        ["hora_inicio", "ASC"], // Finalmente por hora de inicio.
+        ["dia_semana", "ASC"],
+        ["hora_inicio", "ASC"],
       ],
     });
     res.status(200).json(horarios);
   } catch (error) {
-    next(error); // Pasa cualquier error al siguiente middleware.
+    next(error);
+  }
+};
+
+/**
+ * Actualiza un horario disponible existente.
+ * Se ha movido la validación del esquema aquí para asegurar la consistencia.
+ * @param {Object} req - Objeto de solicitud de Express.
+ * @param {Object} res - Objeto de respuesta de Express.
+ * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
+ */
+const updateHorariosDisponible = async (req, res, next) => {
+  try {
+    const administradorId = req.user.administrador_id;
+    const { id } = req.params;
+    const validatedData = horarioDisponibleSchema.partial().parse(req.body);
+    const { dia_semana, hora_inicio, hora_fin } = validatedData;
+
+    const horario = await HorarioDisponible.findOne({
+      where: {
+        horario_disponible_id: id,
+        administrador_id: administradorId,
+      },
+    });
+
+    if (!horario) {
+      throw new NotFoundError(
+        "Horario no encontrado o no pertenece a este administrador."
+      );
+    }
+
+    if (dia_semana && horario.dia_semana !== dia_semana) {
+      const existingHorarioOnNewDay = await HorarioDisponible.findOne({
+        where: {
+          administrador_id: administradorId,
+          dia_semana: dia_semana,
+          horario_disponible_id: { [Op.ne]: id },
+        },
+      });
+
+      if (existingHorarioOnNewDay) {
+        throw new ConflictError(
+          "Ya existe un horario configurado para el día de la semana seleccionado. Por favor, elige otro día."
+        );
+      }
+    }
+
+    await horario.update({
+      dia_semana: dia_semana ?? horario.dia_semana,
+      hora_inicio: hora_inicio ?? horario.hora_inicio,
+      hora_fin: hora_fin ?? horario.hora_fin,
+    });
+
+    res.status(200).json({
+      message: "Horario actualizado exitosamente.",
+      horario: horario,
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return next(
+        new BadRequestError("Datos de entrada inválidos.", error.errors)
+      );
+    }
+    next(error);
+  }
+};
+
+/**
+ * Elimina un horario disponible por su ID.
+ * @param {Object} req - Objeto de solicitud de Express.
+ * @param {Object} res - Objeto de respuesta de Express.
+ * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
+ */
+const deleteHorarioDisponible = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const administradorId = req.user.administrador_id;
+
+    const result = await HorarioDisponible.destroy({
+      where: {
+        horario_disponible_id: id,
+        administrador_id: administradorId,
+      },
+    });
+
+    if (result === 0) {
+      throw new NotFoundError(
+        "Horario no encontrado o no pertenece a este administrador."
+      );
+    }
+    res.status(200).json({ message: "Horario eliminado exitosamente." });
+  } catch (error) {
+    next(error);
   }
 };
 
@@ -118,36 +240,185 @@ const getAllHorariosDisponibles = async (req, res, next) => {
  */
 const createExcepcionDisponibilidad = async (req, res, next) => {
   try {
-    // Valida los datos de entrada usando el esquema Zod.
+    const administradorId = req.user.administrador_id;
     const validatedData = excepcionDisponibilidadSchema.parse(req.body);
-    // Crea la nueva excepción en la base de datos.
-    const newExcepcion = await ExcepcionDisponibilidad.create(validatedData);
+
+    const existingExcepcion = await ExcepcionDisponibilidad.findOne({
+      where: {
+        administrador_id: administradorId,
+        fecha: validatedData.fecha,
+        es_dia_completo: validatedData.es_dia_completo,
+      },
+    });
+
+    if (existingExcepcion) {
+      throw new ConflictError(
+        "Ya existe una excepción de disponibilidad para la fecha seleccionada."
+      );
+    }
+
+    const newExcepcion = await ExcepcionDisponibilidad.create({
+      ...validatedData,
+      administrador_id: administradorId,
+    });
+
     res.status(201).json({
       message: "Excepción de disponibilidad creada.",
       excepcion: newExcepcion,
     });
   } catch (error) {
-    next(error); // Pasa cualquier error al siguiente middleware.
+    if (error instanceof ZodError) {
+      return next(
+        new BadRequestError("Datos de entrada inválidos.", error.errors)
+      );
+    }
+    next(error);
   }
 };
 
 /**
- * Obtiene todas las excepciones de disponibilidad registradas.
- * Incluye información básica del administrador asociado.
+ * Elimina una excepción de disponibilidad por su ID.
+ * @param {Object} req - Objeto de solicitud de Express.
+ * @param {Object} res - Objeto de respuesta de Express.
+ * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
+ */
+const deleteExcepcionDisponibilidad = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const administradorId = req.user.administrador_id;
+
+    const result = await ExcepcionDisponibilidad.destroy({
+      where: {
+        excepcion_id: id,
+        administrador_id: administradorId,
+      },
+    });
+
+    if (result === 0) {
+      throw new NotFoundError(
+        "Excepción no encontrada o no pertenece a este administrador."
+      );
+    }
+    res.status(200).json({ message: "Excepción eliminada exitosamente." });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Obtiene todas las excepciones de disponibilidad para el administrador autenticado.
  * @param {Object} req - Objeto de solicitud de Express.
  * @param {Object} res - Objeto de respuesta de Express.
  * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const getAllExcepcionesDisponibilidad = async (req, res, next) => {
   try {
-    // Busca todas las excepciones de disponibilidad, incluyendo el nombre y apellido del administrador.
+    const administradorId = req.user.administrador_id;
+
     const excepciones = await ExcepcionDisponibilidad.findAll({
-      include: [{ model: Administrador, attributes: ["nombre", "apellido"] }],
-      order: [["fecha", "ASC"]], // Ordena por fecha.
+      where: { administrador_id: administradorId },
+      attributes: [
+        "excepcion_id",
+        "administrador_id",
+        "fecha",
+        "hora_inicio_bloqueo",
+        "hora_fin_bloqueo",
+        "es_dia_completo",
+        "descripcion",
+      ],
+      include: [
+        {
+          model: Administrador,
+          attributes: ["nombre", "apellido"],
+        },
+      ],
+      order: [
+        ["fecha", "ASC"],
+        ["hora_inicio_bloqueo", "ASC"],
+      ],
     });
     res.status(200).json(excepciones);
   } catch (error) {
-    next(error); // Pasa cualquier error al siguiente middleware.
+    next(error);
+  }
+};
+
+/**
+ * Actualiza una excepción de disponibilidad existente.
+ * Se ha movido la validación del esquema aquí para asegurar la consistencia.
+ * @param {Object} req - Objeto de solicitud de Express.
+ * @param {Object} res - Objeto de respuesta de Express.
+ * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
+ */
+const updateExcepcionDisponibilidad = async (req, res, next) => {
+  try {
+    const administradorId = req.user.administrador_id;
+    const { id } = req.params;
+    const validatedData = excepcionDisponibilidadSchema
+      .partial()
+      .parse(req.body);
+    const {
+      fecha,
+      es_dia_completo,
+      hora_inicio_bloqueo,
+      hora_fin_bloqueo,
+      descripcion,
+    } = validatedData;
+
+    const excepcion = await ExcepcionDisponibilidad.findOne({
+      where: {
+        excepcion_id: id,
+        administrador_id: administradorId,
+      },
+    });
+
+    if (!excepcion) {
+      throw new NotFoundError(
+        "Excepción no encontrada o no pertenece a este administrador."
+      );
+    }
+
+    if (fecha && excepcion.fecha !== fecha) {
+      const existingExcepcionOnNewDate = await ExcepcionDisponibilidad.findOne({
+        where: {
+          administrador_id: administradorId,
+          fecha: fecha,
+          excepcion_id: { [Op.ne]: id },
+        },
+      });
+
+      if (existingExcepcionOnNewDate) {
+        throw new ConflictError(
+          "Ya existe una excepción de disponibilidad para la fecha seleccionada."
+        );
+      }
+    }
+
+    await excepcion.update({
+      fecha: fecha ?? excepcion.fecha,
+      es_dia_completo: es_dia_completo ?? excepcion.es_dia_completo,
+      hora_inicio_bloqueo:
+        es_dia_completo === true
+          ? null
+          : hora_inicio_bloqueo ?? excepcion.hora_inicio_bloqueo,
+      hora_fin_bloqueo:
+        es_dia_completo === true
+          ? null
+          : hora_fin_bloqueo ?? excepcion.hora_fin_bloqueo,
+      descripcion: descripcion ?? excepcion.descripcion,
+    });
+
+    res.status(200).json({
+      message: "Excepción de disponibilidad actualizada exitosamente.",
+      excepcion: excepcion,
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return next(
+        new BadRequestError("Datos de entrada inválidos.", error.errors)
+      );
+    }
+    next(error);
   }
 };
 
@@ -158,48 +429,48 @@ const getAllExcepcionesDisponibilidad = async (req, res, next) => {
  * @param {string} fecha - Fecha en formato 'YYYY-MM-DD' (se asume en la zona horaria de Chile).
  * @param {number} tipoAtencionId - ID del tipo de atención para determinar la duración y el buffer de la cita.
  * @param {number|null} [excludeCitaId=null] - Opcional: ID de una cita a excluir de la verificación de superposición.
- * Útil para la lógica de actualización de citas.
+ * @param {object} [transaction=null] - Objeto de transacción de Sequelize.
  * @returns {Promise<Array<Object>>} Un array de objetos { start: string (ISO UTC), end: string (ISO UTC) }
- * representando las franjas horarias disponibles.
- * @throws {Error} Si el formato de fecha es inválido o el tipo de atención no se encuentra.
+ * @throws {NotFoundError} Si el tipo de atención no se encuentra.
+ * @throws {BadRequestError} Si el formato de fecha es inválido.
  */
 const _getAvailableSlotsData = async (
   administradorId,
-  fecha, // Se espera 'YYYY-MM-DD' en la zona horaria de Chile.
+  fecha,
   tipoAtencionId,
-  excludeCitaId = null
+  excludeCitaId = null,
+  transaction = null
 ) => {
-  // Configura Luxon para usar la zona horaria de Chile.
-  Settings.defaultZone = CHILE_TIMEZONE;
-
   // Parsea la fecha objetivo en la zona horaria de Chile y la establece al inicio del día.
-  const targetDateLocal = DateTime.fromISO(fecha).startOf("day");
+  // Se evita modificar la zona horaria global de Luxon.
+  const targetDateLocal = DateTime.fromISO(fecha, {
+    zone: CHILE_TIMEZONE,
+  }).startOf("day");
   if (!targetDateLocal.isValid) {
-    throw new Error("Formato de fecha inválido.");
+    throw new BadRequestError("Formato de fecha inválido.");
   }
-  const dayOfWeek = targetDateLocal.weekday; // Obtiene el día de la semana (1=Lunes, 7=Domingo según Luxon).
+  const dayOfWeek = targetDateLocal.weekday;
 
-  // Obtiene la duración y el buffer del tipo de atención.
-  const tipoAtencion = await TipoAtencion.findByPk(tipoAtencionId);
+  const tipoAtencion = await TipoAtencion.findByPk(tipoAtencionId, {
+    transaction,
+  });
   if (!tipoAtencion) {
-    throw new Error("Tipo de atención no encontrado.");
+    throw new NotFoundError("Tipo de atención no encontrado.");
   }
   const duracionCita = tipoAtencion.duracion_minutos;
   const bufferMinutes = tipoAtencion.buffer_minutos || 0;
 
-  // 1. Obtener horarios base del administrador para el día de la semana.
   const horariosBase = await HorarioDisponible.findAll({
     where: { administrador_id: administradorId, dia_semana: dayOfWeek },
+    transaction,
   });
 
   if (horariosBase.length === 0) {
-    return []; // Si no hay horarios base, no hay franjas disponibles.
+    return [];
   }
 
-  // 2. Generar todas las franjas potenciales basadas en los horarios base.
   let franjasPotenciales = [];
   for (const horario of horariosBase) {
-    // Convierte las horas de inicio y fin del horario base a objetos DateTime locales.
     const startDateTimeLocal = targetDateLocal.set({
       hour: parseInt(horario.hora_inicio.split(":")[0]),
       minute: parseInt(horario.hora_inicio.split(":")[1]),
@@ -209,7 +480,6 @@ const _getAvailableSlotsData = async (
       minute: parseInt(horario.hora_fin.split(":")[1]),
     });
 
-    // Concatena las franjas generadas para este horario base.
     franjasPotenciales = franjasPotenciales.concat(
       generateTimeSlots(
         startDateTimeLocal,
@@ -220,76 +490,62 @@ const _getAvailableSlotsData = async (
     );
   }
 
-  // 3. Obtener citas existentes para el administrador en la fecha objetivo.
   const whereCitasClause = {
     administrador_id: administradorId,
-    // Filtra las citas que caen dentro del día objetivo (de inicio a fin del día UTC).
     fecha_hora_cita: {
       [Op.gte]: targetDateLocal.startOf("day").setZone("utc").toJSDate(),
       [Op.lt]: targetDateLocal.endOf("day").setZone("utc").toJSDate(),
     },
-    estado_cita: { [Op.notIn]: ["Cancelada"] }, // Solo considera citas que no estén canceladas.
+    estado_cita: { [Op.notIn]: ["Cancelada"] },
   };
 
-  // Si se proporciona un `excludeCitaId`, se excluye esa cita de la consulta.
-  // Esto es crucial para que al actualizar una cita, no se considere a sí misma como una superposición.
   if (excludeCitaId) {
-    whereCitasClause.cita_id = { [Op.ne]: excludeCitaId }; // Op.ne significa "no igual a".
+    whereCitasClause.cita_id = { [Op.ne]: excludeCitaId };
   }
 
   const citasExistentes = await Cita.findAll({
     where: whereCitasClause,
     include: [
       {
-        model: TipoAtencion, // Incluye el TipoAtencion para obtener su duración y buffer.
+        model: TipoAtencion,
         attributes: ["duracion_minutos", "buffer_minutos"],
       },
     ],
+    transaction,
   });
 
-  // Calcula los bloques ocupados por las citas existentes (inicio a fin + buffer) en UTC.
   const bookedBlocks = citasExistentes.map((cita) => {
     const bookedStartUTC = DateTime.fromJSDate(cita.fecha_hora_cita, {
       zone: "utc",
     });
-    const bookedDuration = cita.TipoAtencion
-      ? cita.TipoAtencion.duracion_minutos
-      : 0;
-    const bookedBuffer = cita.TipoAtencion
-      ? cita.TipoAtencion.buffer_minutos || 0
-      : 0;
-
+    const bookedDuration = cita.TipoAtencion?.duracion_minutos || 0;
+    const bookedBuffer = cita.TipoAtencion?.buffer_minutos || 0;
     const bookedEndUTC = bookedStartUTC.plus({
       minutes: bookedDuration + bookedBuffer,
     });
     return { start: bookedStartUTC, end: bookedEndUTC };
   });
 
-  // 4. Obtener excepciones de disponibilidad para la fecha objetivo.
   const excepciones = await ExcepcionDisponibilidad.findAll({
-    where: { administrador_id: administradorId, fecha: fecha }, // 'fecha' aquí es YYYY-MM-DD.
+    where: { administrador_id: administradorId, fecha: fecha },
+    transaction,
   });
 
-  // 5. Filtrar las franjas potenciales.
   let franjasDisponibles = franjasPotenciales.filter((slot) => {
     const slotStartUTC = DateTime.fromISO(slot.start, { zone: "utc" });
-    const slotEndUTC = DateTime.fromISO(slot.end, { zone: "utc" }); // Fin de la duración reservable.
-    // Calcula el final del bloque total de la franja potencial (incluyendo su propio buffer).
+    const slotEndUTC = DateTime.fromISO(slot.end, { zone: "utc" });
     const slotTotalBlockEndUTC = slotEndUTC.plus({ minutes: bufferMinutes });
 
-    // a. Filtrar franjas que ya pasaron (basado en la hora actual UTC).
     const nowUTC = DateTime.now().setZone("utc");
     if (slotTotalBlockEndUTC <= nowUTC) {
-      return false; // Si el bloque de la franja ya terminó, no está disponible.
+      return false;
     }
 
-    // b. Verificar superposiciones con excepciones.
     for (const excepcion of excepciones) {
       if (excepcion.es_dia_completo) {
-        return false; // Si hay una excepción de día completo, ninguna franja es disponible.
+        return false;
       }
 
-      // Convierte las horas de inicio y fin de la excepción a objetos DateTime locales y luego a UTC.
       const excepcionStartLocal = targetDateLocal.set({
         hour: parseInt(excepcion.hora_inicio_bloqueo.split(":")[0]),
         minute: parseInt(excepcion.hora_inicio_bloqueo.split(":")[1]),
@@ -302,26 +558,20 @@ const _getAvailableSlotsData = async (
       const excepcionStartUTC = excepcionStartLocal.setZone("utc");
       const excepcionEndUTC = excepcionEndLocal.setZone("utc");
 
-      // Lógica de superposición: [start1, end1) y [start2, end2) se superponen si (end1 > start2 && end2 > start1)
       if (
-        slotTotalBlockEndUTC > excepcionStartUTC && // El final del slot (con buffer) está después del inicio de la excepción
-        excepcionEndUTC > slotStartUTC // El final de la excepción está después del inicio del slot
+        slotTotalBlockEndUTC > excepcionStartUTC &&
+        excepcionEndUTC > slotStartUTC
       ) {
-        return false; // Hay una superposición con una excepción, la franja no está disponible.
+        return false;
       }
     }
 
-    // c. Verificar superposiciones con citas existentes (incluyendo su buffer).
     for (const booked of bookedBlocks) {
-      // booked.start y booked.end ya incluyen el buffer de la cita existente y están en UTC.
-      if (
-        slotTotalBlockEndUTC > booked.start && // El final del slot (con buffer) está después del inicio de la cita existente
-        booked.end > slotStartUTC // El final de la cita existente está después del inicio del slot
-      ) {
-        return false; // Hay una superposición con una cita existente, la franja no está disponible.
+      if (slotTotalBlockEndUTC > booked.start && booked.end > slotStartUTC) {
+        return false;
       }
     }
-    return true; // Si pasa todas las verificaciones, la franja está disponible.
+    return true;
   });
 
   return franjasDisponibles;
@@ -336,52 +586,38 @@ const _getAvailableSlotsData = async (
 const getFranjasDisponibles = async (req, res, next) => {
   try {
     const { administradorId, fecha, tipoAtencionId, excludeCitaId } = req.query;
-    // Valida que los parámetros esenciales estén presentes.
+
     if (!administradorId || !fecha || !tipoAtencionId) {
-      return res.status(400).json({
-        message: "Administrador, fecha y tipo de atención son requeridos.",
-      });
+      throw new BadRequestError(
+        "Administrador, fecha y tipo de atención son requeridos."
+      );
     }
 
-    // Llama a la función auxiliar para obtener las franjas disponibles.
     const franjas = await _getAvailableSlotsData(
       parseInt(administradorId),
       fecha,
       parseInt(tipoAtencionId),
-      excludeCitaId ? parseInt(excludeCitaId) : null // Pasa excludeCitaId si está presente.
+      excludeCitaId ? parseInt(excludeCitaId) : null
     );
 
-    // El frontend espera un array de objetos {start, end} en formato ISO UTC,
-    // o un array de strings con solo la hora formateada.
-    // La línea `res.status(200).json(franjas);` envía el formato {start: ISO, end: ISO}.
-    // La línea comentada `res.status(200).json(formattedFranjas);` enviaría solo las horas.
-    // Mantengo la que envía el objeto completo ya que es más útil para el frontend.
     res.status(200).json(franjas);
-    // const formattedFranjas = franjas.map((slot) => {
-    //   return DateTime.fromISO(slot.start, { zone: "utc" })
-    //     .setZone(CHILE_TIMEZONE)
-    //     .toFormat("HH:mm");
-    // });
-    // res.status(200).json(formattedFranjas);
   } catch (error) {
-    // Manejo de errores específicos para la función _getAvailableSlotsData.
-    if (error.message.includes("Tipo de atención no encontrado")) {
-      return res.status(404).json({ message: error.message });
-    }
-    if (error.message.includes("Formato de fecha inválido")) {
-      return res.status(400).json({ message: error.message });
-    }
-    console.error("Error en getFranjasDisponibles:", error); // Log para errores inesperados.
-    next(error); // Pasa cualquier otro error al siguiente middleware.
+    next(error);
   }
 };
 
 module.exports = {
   createHorarioDisponible,
   getAllHorariosDisponibles,
+  updateHorariosDisponible,
+  deleteHorarioDisponible,
+
   createExcepcionDisponibilidad,
   getAllExcepcionesDisponibilidad,
+  updateExcepcionDisponibilidad,
+  deleteExcepcionDisponibilidad,
+
   getFranjasDisponibles,
-  _getAvailableSlotsData, // Exportado para que appointment.controller.js pueda usarlo directamente.
-  generateTimeSlots, // Exportado si otras partes del sistema necesitan generar franjas.
+  _getAvailableSlotsData,
+  generateTimeSlots,
 };

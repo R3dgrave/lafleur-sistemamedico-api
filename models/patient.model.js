@@ -1,4 +1,4 @@
-// models/Paciente.js
+// models/patient.model.js
 "use strict";
 const { Model } = require("sequelize");
 
