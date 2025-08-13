@@ -2,7 +2,7 @@ const app = require("./app");
 const { connectDB } = require("./config/sequelize");
 require("dotenv").config();
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.DB_PORT_PROD || 3000;
 
 connectDB().then(() => {
   app.listen(PORT, () => {

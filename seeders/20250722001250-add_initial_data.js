@@ -15,7 +15,7 @@ module.exports = {
           administrador_id: 1,
           nombre: "Admin",
           apellido: "Principal",
-          email: "r3dgrave98@gmail.com",
+          email: "correo@gmail.com",
           password_hash: hashedPassword,
           role: "super_admin",
           profile_picture_url:
@@ -106,7 +106,7 @@ module.exports = {
           fecha_nacimiento: "2000-07-01",
           genero: "No Binario",
           identidad_genero: "Género Fluido",
-          sexo_registral: "Masculino", // Asumimos el sexo registral para este ejemplo
+          sexo_registral: "Masculino",
           telefono: "+56955555666",
           email: "luis.mora@example.com",
           direccion: "Calle Central 101",
