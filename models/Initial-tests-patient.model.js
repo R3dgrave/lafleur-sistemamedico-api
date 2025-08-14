@@ -24,7 +24,7 @@ module.exports = (sequelize, DataTypes) => {
       },
       peso: {
         type: DataTypes.DECIMAL(5, 2), // 999.99 kg
-        allowNull: true,
+        allowNull: false,
       },
       altura: {
         type: DataTypes.DECIMAL(4, 2), // 9.99 m

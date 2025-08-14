@@ -1,7 +1,24 @@
-const { DataTypes } = require('sequelize');
+"use strict";
+const { Model } = require("sequelize");
 
-module.exports = (sequelize) => {
-  const PlanTratamiento = sequelize.define('PlanTratamiento', {
+module.exports = (sequelize, DataTypes) => {
+  class PlanTratamiento extends Model {
+    static associate(models) {
+      // Un PlanTratamiento pertenece a una HistoriaClinica
+      PlanTratamiento.belongsTo(models.HistoriaClinica, {
+        foreignKey: "historia_clinica_id",
+        as: "HistoriaClinica",
+      });
+      // Un PlanTratamiento pertenece a una Cita (opcionalmente)
+      PlanTratamiento.belongsTo(models.Cita, {
+        foreignKey: "cita_id",
+        as: "Cita",
+        allowNull: true,
+      });
+    }
+  }
+
+  PlanTratamiento.init({
     plan_id: {
       type: DataTypes.INTEGER,
       primaryKey: true,
@@ -12,21 +29,17 @@ module.exports = (sequelize) => {
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: 'Historia_Clinica', 
-        key: 'historia_clinica_id',
+        model: "Historia_Clinica",
+        key: "historia_clinica_id",
       },
-      onUpdate: 'CASCADE',
-      onDelete: 'CASCADE',
     },
     cita_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
       references: {
-        model: 'Citas',
-        key: 'cita_id',
+        model: "Citas",
+        key: "cita_id",
       },
-      onUpdate: 'SET NULL',
-      onDelete: 'SET NULL',
     },
     fecha_registro: {
       type: DataTypes.DATE,
@@ -53,21 +66,14 @@ module.exports = (sequelize) => {
       type: DataTypes.STRING(255),
       allowNull: true,
     },
-  }, {
-    tableName: 'Plan_Tratamiento',
-    timestamps: false,
-  });
-
-  PlanTratamiento.associate = (models) => {
-    PlanTratamiento.belongsTo(models.HistoriaClinica, {
-      foreignKey: 'historia_clinica_id',
-      as: 'HistoriaClinica',
-    });
-    PlanTratamiento.belongsTo(models.Cita, {
-      foreignKey: 'cita_id',
-      as: 'Cita',
-    });
-  };
+  },
+  {
+      sequelize,
+      modelName: "PlanTratamiento",
+      tableName: "Plan_Tratamiento",
+      timestamps: false,
+    }
+);  
 
   return PlanTratamiento;
 };

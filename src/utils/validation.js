@@ -291,34 +291,58 @@ const createDiagnosticoSchema = historiaClinicaBaseSchema.extend({
 
 const updateDiagnosticoSchema = createDiagnosticoSchema.partial();
 
-const createPruebasInicialesSchema = z.object({
-  fecha_registro: z.coerce.date().optional(),
-  peso: z.number().min(0).max(999.99).optional(),
-  altura: z.number().min(0).max(9.99).optional(),
-  imc: z.number().min(0).max(99.99).optional(),
-  perimetro_cintura: z.number().min(0).max(999.99).optional(),
-  perimetro_cadera: z.number().min(0).max(999.99).optional(),
-  presion_sistolica: z.number().int().positive().optional(),
-  presion_diastolica: z.number().int().positive().optional(),
-  frecuencia_cardiaca: z.number().int().positive().optional(),
-  temperatura: z.number().min(0).max(99.9).optional(),
-  saturacion_oxigeno: z.number().min(0).max(100).optional(),
-  notas_adicionales: z.string().optional(),
+const createPlanTratamientoSchema = historiaClinicaBaseSchema.extend({
+  // fecha_registro tiene un valor por defecto en la base de datos, por lo que no es necesario enviarlo desde el frontend.
+  // Pero si se envía, se valida como un string de fecha (ISO 8601).
+  fecha_registro: z.string({
+    invalid_type_error: 'La fecha de registro debe ser una fecha válida.',
+  }).datetime('La fecha de registro debe ser una fecha válida en formato ISO 8601.').optional(),
+
+  // descripcion_plan es un campo de texto requerido.
+  descripcion_plan: z.string({
+    required_error: 'La descripción del plan es obligatoria.',
+    invalid_type_error: 'La descripción del plan debe ser una cadena de texto.',
+  }).min(1, 'La descripción del plan no puede estar vacía.'),
+
+  // medicamentos_recetados es opcional.
+  medicamentos_recetados: z.string({
+    invalid_type_error: 'Los medicamentos recetados deben ser una cadena de texto.',
+  }).optional().nullable(),
+
+  // indicaciones_adicionales es opcional.
+  indicaciones_adicionales: z.string({
+    invalid_type_error: 'Las indicaciones adicionales deben ser una cadena de texto.',
+  }).optional().nullable(),
+
+  // proxima_cita_recomendada es opcional.
+  proxima_cita_recomendada: z.string({
+    invalid_type_error: 'La fecha de la próxima cita recomendada debe ser una fecha válida.',
+  }).date('La fecha de la próxima cita recomendada debe ser una fecha válida en formato YYYY-MM-DD.').optional().nullable(),
+  
+  // receta_adjunta_url es opcional.
+  receta_adjunta_url: z.string({
+    invalid_type_error: 'La URL de la receta adjunta debe ser una cadena de texto.',
+  }).url('La URL de la receta adjunta debe ser un formato de URL válido.').optional().nullable(),
 });
 
-const updatePruebasInicialesSchema = z.object({
-  peso: z.number().min(0).max(999.99).optional(),
-  altura: z.number().min(0).max(9.99).optional(),
-  imc: z.number().min(0).max(99.99).optional(),
-  perimetro_cintura: z.number().min(0).max(999.99).optional(),
-  perimetro_cadera: z.number().min(0).max(999.99).optional(),
-  presion_sistolica: z.number().int().positive().optional(),
-  presion_diastolica: z.number().int().positive().optional(),
-  frecuencia_cardiaca: z.number().int().positive().optional(),
-  temperatura: z.number().min(0).max(99.9).optional(),
-  saturacion_oxigeno: z.number().min(0).max(100).optional(),
-  notas_adicionales: z.string().optional(),
+const updatePlanTratamientoSchema = createPlanTratamientoSchema.partial();
+
+const createPruebasInicialesSchema = historiaClinicaBaseSchema.extend({
+  fecha_registro: z.coerce.date().optional(),
+  peso: z.number().min(1,"El peso es requerido").max(999.99),
+  altura: z.number().min(0).max(9.99).optional().nullable(),
+  imc: z.number().min(0).max(99.99).optional().nullable(),
+  perimetro_cintura: z.number().min(0).max(999.99).optional().nullable(),
+  perimetro_cadera: z.number().min(0).max(999.99).optional().nullable(),
+  presion_sistolica: z.number().int().positive().optional().nullable(),
+  presion_diastolica: z.number().int().positive().optional().nullable(),
+  frecuencia_cardiaca: z.number().int().positive().optional().nullable(),
+  temperatura: z.number().min(0).max(99.9).optional().nullable(),
+  saturacion_oxigeno: z.number().min(0).max(100).optional().nullable(),
+  notas_adicionales: z.string().optional().nullable(),
 });
+
+const updatePruebasInicialesSchema = createPruebasInicialesSchema.partial();
 
 module.exports = {
   administradorSchema,
@@ -340,6 +364,7 @@ module.exports = {
 
   createHorarioDisponibleSchema,
   updateHorarioDisponibleSchema,
+
   createExcepcionDisponibilidadSchema,
   updateExcepcionDisponibilidadSchema,
 
@@ -353,6 +378,9 @@ module.exports = {
 
   createDiagnosticoSchema,
   updateDiagnosticoSchema,
+
+  createPlanTratamientoSchema,
+  updatePlanTratamientoSchema,
 
   createPruebasInicialesSchema,
   updatePruebasInicialesSchema

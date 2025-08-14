@@ -506,15 +506,9 @@ class ClinicalHistoryController {
     try {
       const { planId } = req.params;
       const validatedData = updatePlanTratamientoSchema.parse(req.body);
-
+      
       const planTratamiento = await this.planTratamiento.findById(planId);
 
-      if (validatedData.cita_id) {
-        const cita = await Cita.findByPk(validatedData.cita_id);
-        if (!cita) {
-          throw new NotFoundError("Cita asociada no encontrada.");
-        }
-      }
       await planTratamiento.update(validatedData);
 
       res.status(200).json({
@@ -534,7 +528,7 @@ class ClinicalHistoryController {
       const { planId } = req.params;
 
       const result = await PlanTratamiento.destroy({
-        where: { plan_tratamiento_id: planId },
+        where: { plan_id: planId },
       });
       if (result === 0) {
         throw new NotFoundError("Plan de tratamiento no encontrado.");
