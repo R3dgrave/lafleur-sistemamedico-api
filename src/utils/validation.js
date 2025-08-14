@@ -12,6 +12,7 @@ const emailString = z
   .string()
   .trim()
   .toLowerCase()
+  .min(1, "El correo es requerido")
   .email("Formato de email inválido.");
 
 const passwordString = z
@@ -142,7 +143,7 @@ const pacienteBaseSchema = z.object({
   apellido: apellidoString,
   fecha_nacimiento: CHILE_DATE_TRANSFORM,
   genero: z.enum(GENERO_ENUM, { errorMap: () => ({ message: "Género inválido." }) }),
-  email: emailString.min(1, "El email es requerido."),
+  email: emailString,
   telefono: telefonoString,
   direccion: z.string().trim().min(5).max(200).optional().nullable(),
   identidad_genero: z.string().trim().max(50).optional().nullable(),

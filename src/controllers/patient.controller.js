@@ -9,12 +9,88 @@ const { NotFoundError, BadRequestError } = require("../utils/customErrors");
 const createPaciente = async (req, res, next) => {
   try {
     const validatedData = createPacienteSchema.parse(req.body);
+
+    const errors = [];
+    let generalMessage = "Error de validación de unicidad.";
+    const existingPatientByEmail = await Paciente.findOne({
+      where: { email: validatedData.email },
+    });
+    if (existingPatientByEmail) {
+      errors.push({
+        path: ["email"],
+        message: "Este email ya está registrado.",
+      });
+    }
+
+    const existingPatientByRut = await Paciente.findOne({
+      where: { rut: validatedData.rut },
+    });
+    if (existingPatientByRut) {
+      errors.push({ path: ["rut"], message: "Este RUT ya está registrado." });
+    }
+
+    if (errors.length > 0) {
+      if (errors.length === 2) {
+        generalMessage = "El email y el RUT ya están registrados.";
+      } else if (errors.length === 1) {
+        generalMessage = errors[0].message;
+      }
+      return res.status(409).json({
+        message: generalMessage,
+        errors: errors,
+      });
+    }
+
     const newPaciente = await Paciente.create(validatedData);
     res.status(201).json({
       message: "Paciente registrado exitosamente",
       paciente: newPaciente,
     });
   } catch (error) {
+    if (error.name === "SequelizeUniqueConstraintError") {
+      let errors = [];
+      if (error.errors && error.errors.length > 0) {
+        errors = error.errors.map((err) => {
+          const field =
+            err.path && typeof err.path === "string"
+              ? err.path
+              : "unknown_field";
+          let message = err.message || "Valor duplicado.";
+          return { path: [field], message: message };
+        });
+      } else if (error.parent && error.parent.constraint) {
+        const constraintName = error.parent.constraint;
+        let field = "unknown_field";
+        let message = error.parent.detail || "Error de unicidad desconocido.";
+
+        if (constraintName.includes("email")) {
+          field = "email";
+          message = "Este email ya está registrado.";
+        } else if (constraintName.includes("rut")) {
+          field = "rut";
+          message = "Este RUT ya está registrado.";
+        } else if (constraintName.includes("pkey")) {
+          field = "paciente_id";
+          message =
+            "Ya existe un paciente con este ID (problema de clave primaria).";
+        }
+        errors.push({ path: [field], message: message });
+      }
+
+      return res.status(409).json({
+        message: "Error de validación de unicidad.",
+        errors: errors,
+      });
+    } else if (error.issues) {
+      const zodErrors = error.issues.map((issue) => ({
+        path: issue.path,
+        message: issue.message,
+      }));
+      return res.status(400).json({
+        message: "Errores de validación de datos.",
+        errors: zodErrors,
+      });
+    }
     next(error);
   }
 };
