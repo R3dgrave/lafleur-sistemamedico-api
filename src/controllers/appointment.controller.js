@@ -5,6 +5,7 @@ const {
   TipoAtencion,
   Administrador,
   sequelize,
+  UniqueConstraintError, // Importamos el error específico
 } = require("../../models/index");
 const { createCitaSchema, updateCitaSchema } = require("../utils/validation");
 const { Op } = require("sequelize");
@@ -15,107 +16,147 @@ const { validate } = require("uuid");
 const CHILE_TIMEZONE = "America/Santiago";
 
 /**
- * Valida si una franja horaria específica está disponible.
- * @param {number} administradorId - ID del administrador.
- * @param {string} requestedDateISO - Fecha solicitada en formato ISO ('YYYY-MM-DD').
- * @param {string} requestedStartISO - Fecha y hora de inicio solicitada en formato ISO (UTC).
- * @param {object} [options] - Opciones adicionales, incluyendo la transacción y la cita a excluir.
- * @returns {Promise<boolean>} - `true` si la franja está disponible.
- */
+ * Valida si una franja horaria específica está disponible.
+ * @param {number} administradorId - ID del administrador.
+ * @param {number} tipoAtencionId - ID del tipo de atención para la cita que se está creando/actualizando.
+ * @param {string} requestedDateISO - Fecha solicitada en formato ISO ('YYYY-MM-DD').
+ * @param {string} requestedStartISO - Fecha y hora de inicio solicitada en formato ISO (UTC).
+ * @param {object} [options] - Opciones adicionales, incluyendo la transacción y la cita a excluir.
+ * @returns {Promise<boolean>} - `true` si la franja está disponible.
+ */
 const validateAppointmentAvailability = async (
-  administradorId,
-  requestedDateISO,
-  requestedStartISO,
-  options = {}
+  administradorId,
+  tipoAtencionId,
+  requestedDateISO,
+  requestedStartISO,
+  options = {}
 ) => {
-  const { excludeCitaId = null, transaction = null } = options;
+  const { excludeCitaId = null, transaction = null } = options; // _getAvailableSlotsData necesita tipoAtencionId
 
-  // La función _getAvailableSlotsData ahora usa `requestedDateISO` directamente
-  // y la duración es fija, por lo que no se necesita el tipoAtencionId.
-  const availableSlots = await _getAvailableSlotsData(
-    administradorId,
-    requestedDateISO,
-    excludeCitaId,
-    transaction
-  );
+  const availableSlots = await _getAvailableSlotsData(
+    administradorId,
+    requestedDateISO,
+    tipoAtencionId,
+    excludeCitaId,
+    transaction
+  );
 
-  const isSlotAvailable = availableSlots.some((slot) => {
-    const slotStartUTC = DateTime.fromISO(slot.start, {
-      zone: "utc",
-    }).startOf("minute");
-    const requestedStartDateTimeUTC = DateTime.fromISO(requestedStartISO, {
-      zone: "utc",
-    }).startOf("minute");
-    return requestedStartDateTimeUTC.equals(slotStartUTC);
-  });
+  const isSlotAvailable = availableSlots.some((slot) => {
+    const slotStartUTC = DateTime.fromISO(slot.start, {
+      zone: "utc",
+    }).startOf("minute");
+    const requestedStartDateTimeUTC = DateTime.fromISO(requestedStartISO, {
+      zone: "utc",
+    }).startOf("minute");
+    return requestedStartDateTimeUTC.equals(slotStartUTC);
+  });
 
-  return isSlotAvailable;
+  return isSlotAvailable;
 };
 
 const createCita = async (req, res, next) => {
-  const t = await sequelize.transaction();
+  const t = await sequelize.transaction();
 
-  try {
-    const validatedData = createCitaSchema.parse(req.body);
-    const { paciente_id, administrador_id, fecha_hora_cita, tipo_atencion_id } =
-      validatedData;
+  try {
+    const validatedData = createCitaSchema.parse(req.body);
+    const { paciente_id, administrador_id, fecha_hora_cita, tipo_atencion_id } =
+      validatedData;
 
-    // Usa new Date() para parsear el string de la fecha,
-    // y luego Luxon.fromJSDate para crear un objeto Luxon robusto.
-    const requestedStartDateTime = DateTime.fromJSDate(new Date(fecha_hora_cita));
+    const requestedStartDateTime = DateTime.fromJSDate(
+      new Date(fecha_hora_cita)
+    ).setZone(CHILE_TIMEZONE, { keepLocalTime: true });
 
-    if (!requestedStartDateTime.isValid) {
-      throw new BadRequestError("Formato de fecha de solicitud inválido.");
-    }
-    
-    const requestedDateISO = requestedStartDateTime.toISODate();
-    const requestedStartISO = requestedStartDateTime.toISO();
+    if (!requestedStartDateTime.isValid) {
+      throw new BadRequestError("Formato de fecha de solicitud inválido.");
+    } // Estandarizamos la fecha para usarla en todas las consultas
 
-    const [paciente, administrador, tipoAtencion] = await Promise.all([
-      Paciente.findByPk(paciente_id, { transaction: t }),
-      Administrador.findByPk(administrador_id, { transaction: t }),
-      TipoAtencion.findByPk(tipo_atencion_id, { transaction: t }),
-    ]);
+    const standardizedDate = requestedStartDateTime.toJSDate();
+    const requestedDateISO = requestedStartDateTime.toISODate();
+    const requestedStartISO = requestedStartDateTime.toISO();
 
-    if (!paciente) {
-      throw new NotFoundError("Paciente no encontrado.");
-    }
-    if (!administrador) {
-      throw new NotFoundError("Administrador no encontrado.");
-    }
-    if (!tipoAtencion) {
-      throw new NotFoundError("Tipo de atención no encontrado.");
-    }
-    
-    const isSlotAvailable = await validateAppointmentAvailability(
-      administrador_id,
-      requestedDateISO,
-      requestedStartISO,
-      { transaction: t }
-    );
-    
-    if (!isSlotAvailable) {
-      throw new BadRequestError(
-        "La franja horaria solicitada no está disponible o se solapa con otra cita/excepción."
-      );
-    }
+    const [paciente, administrador, tipoAtencion] = await Promise.all([
+      Paciente.findByPk(paciente_id, { transaction: t }),
+      Administrador.findByPk(administrador_id, { transaction: t }),
+      TipoAtencion.findByPk(tipo_atencion_id, { transaction: t }),
+    ]);
 
-    const newCita = await Cita.create(
-      { ...validatedData, fecha_hora_cita: new Date(fecha_hora_cita) },
-      { transaction: t }
-    );
+    if (!paciente) {
+      throw new NotFoundError("Paciente no encontrado.");
+    }
+    if (!administrador) {
+      throw new NotFoundError("Administrador no encontrado.");
+    }
+    if (!tipoAtencion) {
+      throw new NotFoundError("Tipo de atención no encontrado.");
+    } // VALIDACIÓN: El paciente no puede tener otra cita agendada a la misma hora.
 
-    await t.commit();
+    const existingPatientAppointment = await Cita.findOne({
+      where: {
+        paciente_id,
+        fecha_hora_cita: standardizedDate,
+        estado_cita: { [Op.notIn]: ["Cancelada"] },
+      },
+      transaction: t,
+    });
 
-    res
-      .status(201)
-      .json({ message: "Cita creada exitosamente.", cita: newCita });
-  } catch (error) {
-    if (t && !t.finished) {
-      await t.rollback();
-    }
-    next(error);
-  }
+    if (existingPatientAppointment) {
+      throw new BadRequestError(
+        "El paciente ya tiene una cita agendada para esta fecha y hora."
+      );
+    } // VALIDACIÓN: El administrador no puede tener otra cita agendada a la misma hora.
+
+    const existingAdminAppointment = await Cita.findOne({
+      where: {
+        administrador_id,
+        fecha_hora_cita: standardizedDate,
+        estado_cita: { [Op.notIn]: ["Cancelada"] },
+      },
+      transaction: t,
+    });
+
+    if (existingAdminAppointment) {
+      throw new BadRequestError(
+        "El administrador no está disponible para esta fecha y hora."
+      );
+    } // Pasar el tipo_atencion_id a la validación de disponibilidad del administrador
+
+    const isSlotAvailable = await validateAppointmentAvailability(
+      administrador_id,
+      tipo_atencion_id,
+      requestedDateISO,
+      requestedStartISO,
+      { transaction: t }
+    );
+
+    if (!isSlotAvailable) {
+      throw new BadRequestError(
+        "La franja horaria solicitada no está disponible o se solapa con otra cita/excepción."
+      );
+    }
+
+    const newCita = await Cita.create(
+      { ...validatedData, fecha_hora_cita: standardizedDate },
+      { transaction: t }
+    );
+
+    await t.commit();
+
+    res
+      .status(201)
+      .json({ message: "Cita creada exitosamente.", cita: newCita });
+  } catch (error) {
+    if (t && !t.finished) {
+      await t.rollback();
+    } // Manejar el error de restricción única de Sequelize
+    if (error.name === "SequelizeUniqueConstraintError") {
+      return next(
+        new BadRequestError(
+          "Ya existe una cita agendada en este horario. Por favor, revisa la disponibilidad."
+        )
+      );
+    }
+    next(error);
+  }
 };
 
 const getAllCitas = async (req, res, next) => {
@@ -204,105 +245,124 @@ const getCitasByPacienteRut = async (req, res, next) => {
 };
 
 const updateCita = async (req, res, next) => {
-  const t = await sequelize.transaction();
-  try {
-    const { id } = req.params;
-    const validatedData = updateCitaSchema.parse(req.body);
+  const t = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const validatedData = updateCitaSchema.parse(req.body);
 
-    const cita = await Cita.findByPk(id, { transaction: t });
-    if (!cita) {
-      throw new NotFoundError("Cita no encontrada.");
-    }
+    const cita = await Cita.findByPk(id, { transaction: t });
+    if (!cita) {
+      throw new NotFoundError("Cita no encontrada.");
+    }
 
-    const checks = [
-      {
-        id: validatedData.paciente_id,
-        currentId: cita.paciente_id,
-        Model: Paciente,
-        name: "Paciente",
-        path: "paciente_id",
-      },
-      {
-        id: validatedData.administrador_id,
-        currentId: cita.administrador_id,
-        Model: Administrador,
-        name: "Administrador",
-        path: "administrador_id",
-      },
-      {
-        id: validatedData.tipo_atencion_id,
-        currentId: cita.tipo_atencion_id,
-        Model: TipoAtencion,
-        name: "Tipo de atención",
-        path: "tipo_atencion_id",
-      },
-    ];
+    const checks = [
+      {
+        id: validatedData.paciente_id,
+        currentId: cita.paciente_id,
+        Model: Paciente,
+        name: "Paciente",
+        path: "paciente_id",
+      },
+      {
+        id: validatedData.administrador_id,
+        currentId: cita.administrador_id,
+        Model: Administrador,
+        name: "Administrador",
+        path: "administrador_id",
+      },
+      {
+        id: validatedData.tipo_atencion_id,
+        currentId: cita.tipo_atencion_id,
+        Model: TipoAtencion,
+        name: "Tipo de atención",
+        path: "tipo_atencion_id",
+      },
+    ];
 
-    const errors = [];
-    for (const check of checks) {
-      if (check.id && check.id !== check.currentId) {
-        const entity = await check.Model.findByPk(check.id, { transaction: t });
-        if (!entity) {
-          errors.push({
-            path: [check.path],
-            message: `Nuevo ${check.name} asociado no encontrado.`,
-          });
-        }
-      }
-    }
+    const errors = [];
+    for (const check of checks) {
+      if (check.id && check.id !== check.currentId) {
+        const entity = await check.Model.findByPk(check.id, { transaction: t });
+        if (!entity) {
+          errors.push({
+            path: [check.path],
+            message: `Nuevo ${check.name} asociado no encontrado.`,
+          });
+        }
+      }
+    }
 
-    if (errors.length > 0) {
-      throw new BadRequestError(
-        "Errores al verificar entidades relacionadas para la actualización.",
-        errors
-      );
-    }
+    if (errors.length > 0) {
+      throw new BadRequestError(
+        "Errores al verificar entidades relacionadas para la actualización.",
+        errors
+      );
+    }
 
-    const hasAvailabilityChanged =
-      validatedData.fecha_hora_cita ||
-      validatedData.tipo_atencion_id ||
-      validatedData.administrador_id;
+    const hasAvailabilityChanged =
+      validatedData.fecha_hora_cita ||
+      validatedData.tipo_atencion_id ||
+      validatedData.administrador_id;
 
-    if (hasAvailabilityChanged) {
-      const currentTipoAtencionId = validatedData.tipo_atencion_id || cita.tipo_atencion_id;
-      const currentAdministradorId = validatedData.administrador_id || cita.administrador_id;
-      const currentFechaHoraCita = validatedData.fecha_hora_cita
-        ? new Date(validatedData.fecha_hora_cita)
-        : new Date(cita.fecha_hora_cita);
+    if (hasAvailabilityChanged) {
+      const currentTipoAtencionId =
+        validatedData.tipo_atencion_id || cita.tipo_atencion_id;
+      const currentAdministradorId =
+        validatedData.administrador_id || cita.administrador_id;
+      const currentFechaHoraCita = validatedData.fecha_hora_cita
+        ? DateTime.fromJSDate(new Date(validatedData.fecha_hora_cita))
+            .setZone(CHILE_TIMEZONE, { keepLocalTime: true })
+            .toJSDate()
+        : new Date(cita.fecha_hora_cita); // Validar la disponibilidad del administrador
 
-      // Usa DateTime.fromJSDate para parsear el objeto de fecha JS a Luxon
-      const requestedStartDateTime = DateTime.fromJSDate(currentFechaHoraCita);
+      const requestedStartDateTime = DateTime.fromJSDate(currentFechaHoraCita);
+      const requestedDateISO = requestedStartDateTime.toISODate();
+      const requestedStartISO = requestedStartDateTime.toISO();
 
-      const requestedDateISO = requestedStartDateTime.toISODate();
-      const requestedStartISO = requestedStartDateTime.toISO();
+      const isAvailable = await validateAppointmentAvailability(
+        currentAdministradorId,
+        currentTipoAtencionId,
+        requestedDateISO,
+        requestedStartISO,
+        { excludeCitaId: id, transaction: t }
+      );
 
-      const isAvailable = await validateAppointmentAvailability(
-        currentAdministradorId,
-        requestedDateISO,
-        requestedStartISO,
-        { excludeCitaId: id, transaction: t }
-      );
+      if (!isAvailable) {
+        throw new BadRequestError(
+          "La franja horaria solicitada no está disponible o se solapa con otra cita/excepción."
+        );
+      } // Validar la disponibilidad del paciente (nueva validación en la actualización)
 
-      if (!isAvailable) {
-        throw new BadRequestError(
-          "La franja horaria solicitada no está disponible o se solapa con otra cita/excepción."
-        );
-      }
-    }
+      const currentPacienteId = validatedData.paciente_id || cita.paciente_id;
+      const existingPatientAppointment = await Cita.findOne({
+        where: {
+          cita_id: { [Op.ne]: id },
+          paciente_id: currentPacienteId,
+          fecha_hora_cita: currentFechaHoraCita,
+          estado_cita: { [Op.notIn]: ["Cancelada"] },
+        },
+        transaction: t,
+      });
+      if (existingPatientAppointment) {
+        throw new BadRequestError(
+          "El paciente ya tiene una cita agendada para esta fecha y hora."
+        );
+      }
+    }
 
-    await cita.update(validatedData, { transaction: t });
-    await t.commit();
+    await cita.update(validatedData, { transaction: t });
+    await t.commit();
 
-    res.status(200).json({
-      message: "Cita actualizada exitosamente",
-      cita: cita,
-    });
-  } catch (error) {
-    if (t && !t.finished) {
-      await t.rollback();
-    }
-    next(error);
-  }
+    res.status(200).json({
+      message: "Cita actualizada exitosamente",
+      cita: cita,
+    });
+  } catch (error) {
+    if (t && !t.finished) {
+      await t.rollback();
+    }
+    next(error);
+  }
 };
 
 const deleteCita = async (req, res, next) => {

@@ -21,13 +21,12 @@ const CHILE_TIMEZONE = "America/Santiago";
 const { ZodError } = require("zod");
 
 /**
- * Genera una lista de franjas horarias potenciales basadas en un rango de tiempo,
- * la duración de la cita y el tiempo de buffer.
- * @param {DateTime} startDateTimeLocal - Objeto Luxon DateTime del inicio del horario disponible (en zona horaria local).
- * @param {DateTime} endDateTimeLocal - Objeto Luxon DateTime del fin del horario disponible (en zona horaria local).
- * @param {number} durationMinutes - Duración de cada cita en minutos.
- * @param {number} bufferMinutes - Tiempo de buffer en minutos a añadir después de cada cita.
- * @returns {Array<Object>} Un array de objetos { start: string (ISO UTC), end: string (ISO UTC) } representando las franjas.
+ * Función auxiliar para generar franjas horarias a partir de un rango y una duración.
+ * @param {DateTime} startDateTimeLocal - Hora de inicio en formato Luxon (local).
+ * @param {DateTime} endDateTimeLocal - Hora de fin en formato Luxon (local).
+ * @param {number} durationMinutes - Duración de cada franja en minutos.
+ * @param {number} bufferMinutes - Búfer entre franjas en minutos.
+ * @returns {Array<Object>} Un array de objetos { start: string (ISO UTC), end: string (ISO UTC) }.
  */
 const generateTimeSlots = (
   startDateTimeLocal,
@@ -65,41 +64,39 @@ const generateTimeSlots = (
  */
 const createHorarioDisponible = async (req, res, next) => {
   try {
-    const administradorId = req.user.administrador_id;
-    const validatedData = horarioDisponibleSchema.parse(req.body);
-    const { dia_semana, hora_inicio, hora_fin } = validatedData;
-
-    // Verificar si ya existe un horario para este administrador y día de la semana.
+    const validatedData = createHorarioDisponibleSchema.parse(req.body);
+    const { dia_semana, hora_inicio, hora_fin, administrador_id } =
+      validatedData;
     const existingHorario = await HorarioDisponible.findOne({
       where: {
-        administrador_id: administradorId,
-        dia_semana: dia_semana,
+        administrador_id,
+        dia_semana,
+        [Op.or]: [
+          // Comprobar si el nuevo horario se solapa con uno existente
+          {
+            hora_inicio: {
+              [Op.lt]: hora_fin,
+            },
+            hora_fin: {
+              [Op.gt]: hora_inicio,
+            },
+          },
+        ],
       },
     });
 
     if (existingHorario) {
-      throw new ConflictError(
-        "Ya existe un horario configurado para este día de la semana. Por favor, edita el horario existente en lugar de crear uno nuevo."
+      throw new BadRequestError(
+        "La franja horaria se solapa con un horario existente para este administrador y día de la semana."
       );
     }
 
-    const newHorario = await HorarioDisponible.create({
-      administrador_id: administradorId,
-      dia_semana,
-      hora_inicio,
-      hora_fin,
-    });
-
+    const newHorario = await HorarioDisponible.create(validatedData);
     res.status(201).json({
       message: "Horario disponible creado exitosamente.",
       horario: newHorario,
     });
   } catch (error) {
-    if (error instanceof ZodError) {
-      return next(
-        new BadRequestError("Datos de entrada inválidos.", error.errors)
-      );
-    }
     next(error);
   }
 };
@@ -112,23 +109,15 @@ const createHorarioDisponible = async (req, res, next) => {
  */
 const getAllHorariosDisponibles = async (req, res, next) => {
   try {
-    const administradorId = req.user.administrador_id;
+    const { administrador_id } = req.query;
+    const whereClause = {};
+
+    if (administrador_id) {
+      whereClause.administrador_id = administrador_id;
+    }
 
     const horarios = await HorarioDisponible.findAll({
-      where: { administrador_id: administradorId },
-      attributes: [
-        "horario_disponible_id",
-        "administrador_id",
-        "dia_semana",
-        "hora_inicio",
-        "hora_fin",
-      ],
-      include: [
-        {
-          model: Administrador,
-          attributes: ["administrador_id", "nombre", "apellido"],
-        },
-      ],
+      where: whereClause,
       order: [
         ["dia_semana", "ASC"],
         ["hora_inicio", "ASC"],
@@ -148,56 +137,54 @@ const getAllHorariosDisponibles = async (req, res, next) => {
  * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const updateHorariosDisponible = async (req, res, next) => {
+  const t = await sequelize.transaction();
   try {
-    const administradorId = req.user.administrador_id;
     const { id } = req.params;
-    const validatedData = horarioDisponibleSchema.partial().parse(req.body);
-    const { dia_semana, hora_inicio, hora_fin } = validatedData;
+    const validatedData = updateHorarioDisponibleSchema.parse(req.body);
 
-    const horario = await HorarioDisponible.findOne({
-      where: {
-        horario_disponible_id: id,
-        administrador_id: administradorId,
-      },
-    });
-
+    const horario = await HorarioDisponible.findByPk(id, { transaction: t });
     if (!horario) {
-      throw new NotFoundError(
-        "Horario no encontrado o no pertenece a este administrador."
+      throw new NotFoundError("Horario no encontrado.");
+    }
+
+    const { dia_semana, hora_inicio, hora_fin, administrador_id } = {
+      ...horario.get(),
+      ...validatedData,
+    };
+
+    const existingHorario = await HorarioDisponible.findOne({
+      where: {
+        horario_id: { [Op.ne]: id },
+        administrador_id,
+        dia_semana,
+        [Op.or]: [
+          {
+            hora_inicio: {
+              [Op.lt]: hora_fin,
+            },
+            hora_fin: {
+              [Op.gt]: hora_inicio,
+            },
+          },
+        ],
+      },
+      transaction: t,
+    });
+
+    if (existingHorario) {
+      throw new BadRequestError(
+        "La franja horaria actualizada se solapa con un horario existente."
       );
     }
 
-    if (dia_semana && horario.dia_semana !== dia_semana) {
-      const existingHorarioOnNewDay = await HorarioDisponible.findOne({
-        where: {
-          administrador_id: administradorId,
-          dia_semana: dia_semana,
-          horario_disponible_id: { [Op.ne]: id },
-        },
-      });
-
-      if (existingHorarioOnNewDay) {
-        throw new ConflictError(
-          "Ya existe un horario configurado para el día de la semana seleccionado. Por favor, elige otro día."
-        );
-      }
-    }
-
-    await horario.update({
-      dia_semana: dia_semana ?? horario.dia_semana,
-      hora_inicio: hora_inicio ?? horario.hora_inicio,
-      hora_fin: hora_fin ?? horario.hora_fin,
-    });
-
-    res.status(200).json({
-      message: "Horario actualizado exitosamente.",
-      horario: horario,
-    });
+    await horario.update(validatedData, { transaction: t });
+    await t.commit();
+    res
+      .status(200)
+      .json({ message: "Horario disponible actualizado exitosamente." });
   } catch (error) {
-    if (error instanceof ZodError) {
-      return next(
-        new BadRequestError("Datos de entrada inválidos.", error.errors)
-      );
+    if (t && !t.finished) {
+      await t.rollback();
     }
     next(error);
   }
@@ -210,24 +197,24 @@ const updateHorariosDisponible = async (req, res, next) => {
  * @param {Function} next - Función para pasar el control al siguiente middleware de errores.
  */
 const deleteHorarioDisponible = async (req, res, next) => {
+  const t = await sequelize.transaction();
   try {
     const { id } = req.params;
-    const administradorId = req.user.administrador_id;
-
     const result = await HorarioDisponible.destroy({
-      where: {
-        horario_disponible_id: id,
-        administrador_id: administradorId,
-      },
+      where: { horario_id: id },
+      transaction: t,
     });
-
     if (result === 0) {
-      throw new NotFoundError(
-        "Horario no encontrado o no pertenece a este administrador."
-      );
+      throw new NotFoundError("Horario disponible no encontrado.");
     }
-    res.status(200).json({ message: "Horario eliminado exitosamente." });
+    await t.commit();
+    res
+      .status(200)
+      .json({ message: "Horario disponible eliminado exitosamente." });
   } catch (error) {
+    if (t && !t.finished) {
+      await t.rollback();
+    }
     next(error);
   }
 };
@@ -240,38 +227,13 @@ const deleteHorarioDisponible = async (req, res, next) => {
  */
 const createExcepcionDisponibilidad = async (req, res, next) => {
   try {
-    const administradorId = req.user.administrador_id;
-    const validatedData = excepcionDisponibilidadSchema.parse(req.body);
-
-    const existingExcepcion = await ExcepcionDisponibilidad.findOne({
-      where: {
-        administrador_id: administradorId,
-        fecha: validatedData.fecha,
-        es_dia_completo: validatedData.es_dia_completo,
-      },
-    });
-
-    if (existingExcepcion) {
-      throw new ConflictError(
-        "Ya existe una excepción de disponibilidad para la fecha seleccionada."
-      );
-    }
-
-    const newExcepcion = await ExcepcionDisponibilidad.create({
-      ...validatedData,
-      administrador_id: administradorId,
-    });
-
+    const validatedData = createExcepcionDisponibilidadSchema.parse(req.body);
+    const newExcepcion = await ExcepcionDisponibilidad.create(validatedData);
     res.status(201).json({
-      message: "Excepción de disponibilidad creada.",
+      message: "Excepción de disponibilidad creada exitosamente.",
       excepcion: newExcepcion,
     });
   } catch (error) {
-    if (error instanceof ZodError) {
-      return next(
-        new BadRequestError("Datos de entrada inválidos.", error.errors)
-      );
-    }
     next(error);
   }
 };
@@ -285,21 +247,15 @@ const createExcepcionDisponibilidad = async (req, res, next) => {
 const deleteExcepcionDisponibilidad = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const administradorId = req.user.administrador_id;
-
     const result = await ExcepcionDisponibilidad.destroy({
-      where: {
-        excepcion_id: id,
-        administrador_id: administradorId,
-      },
+      where: { excepcion_id: id },
     });
-
     if (result === 0) {
-      throw new NotFoundError(
-        "Excepción no encontrada o no pertenece a este administrador."
-      );
+      throw new NotFoundError("Excepción de disponibilidad no encontrada.");
     }
-    res.status(200).json({ message: "Excepción eliminada exitosamente." });
+    res
+      .status(200)
+      .json({ message: "Excepción de disponibilidad eliminada exitosamente." });
   } catch (error) {
     next(error);
   }
@@ -313,29 +269,22 @@ const deleteExcepcionDisponibilidad = async (req, res, next) => {
  */
 const getAllExcepcionesDisponibilidad = async (req, res, next) => {
   try {
-    const administradorId = req.user.administrador_id;
+    const { administrador_id, fecha_inicio, fecha_fin } = req.query;
+    const whereClause = {};
+
+    if (administrador_id) {
+      whereClause.administrador_id = administrador_id;
+    }
+
+    if (fecha_inicio && fecha_fin) {
+      whereClause.fecha = {
+        [Op.between]: [fecha_inicio, fecha_fin],
+      };
+    }
 
     const excepciones = await ExcepcionDisponibilidad.findAll({
-      where: { administrador_id: administradorId },
-      attributes: [
-        "excepcion_id",
-        "administrador_id",
-        "fecha",
-        "hora_inicio_bloqueo",
-        "hora_fin_bloqueo",
-        "es_dia_completo",
-        "descripcion",
-      ],
-      include: [
-        {
-          model: Administrador,
-          attributes: ["nombre", "apellido"],
-        },
-      ],
-      order: [
-        ["fecha", "ASC"],
-        ["hora_inicio_bloqueo", "ASC"],
-      ],
+      where: whereClause,
+      order: [["fecha", "ASC"]],
     });
     res.status(200).json(excepciones);
   } catch (error) {
@@ -352,72 +301,17 @@ const getAllExcepcionesDisponibilidad = async (req, res, next) => {
  */
 const updateExcepcionDisponibilidad = async (req, res, next) => {
   try {
-    const administradorId = req.user.administrador_id;
     const { id } = req.params;
-    const validatedData = excepcionDisponibilidadSchema
-      .partial()
-      .parse(req.body);
-    const {
-      fecha,
-      es_dia_completo,
-      hora_inicio_bloqueo,
-      hora_fin_bloqueo,
-      descripcion,
-    } = validatedData;
-
-    const excepcion = await ExcepcionDisponibilidad.findOne({
-      where: {
-        excepcion_id: id,
-        administrador_id: administradorId,
-      },
-    });
-
+    const validatedData = updateExcepcionDisponibilidadSchema.parse(req.body);
+    const excepcion = await ExcepcionDisponibilidad.findByPk(id);
     if (!excepcion) {
-      throw new NotFoundError(
-        "Excepción no encontrada o no pertenece a este administrador."
-      );
+      throw new NotFoundError("Excepción no encontrada.");
     }
-
-    if (fecha && excepcion.fecha !== fecha) {
-      const existingExcepcionOnNewDate = await ExcepcionDisponibilidad.findOne({
-        where: {
-          administrador_id: administradorId,
-          fecha: fecha,
-          excepcion_id: { [Op.ne]: id },
-        },
-      });
-
-      if (existingExcepcionOnNewDate) {
-        throw new ConflictError(
-          "Ya existe una excepción de disponibilidad para la fecha seleccionada."
-        );
-      }
-    }
-
-    await excepcion.update({
-      fecha: fecha ?? excepcion.fecha,
-      es_dia_completo: es_dia_completo ?? excepcion.es_dia_completo,
-      hora_inicio_bloqueo:
-        es_dia_completo === true
-          ? null
-          : hora_inicio_bloqueo ?? excepcion.hora_inicio_bloqueo,
-      hora_fin_bloqueo:
-        es_dia_completo === true
-          ? null
-          : hora_fin_bloqueo ?? excepcion.hora_fin_bloqueo,
-      descripcion: descripcion ?? excepcion.descripcion,
-    });
-
+    await excepcion.update(validatedData);
     res.status(200).json({
       message: "Excepción de disponibilidad actualizada exitosamente.",
-      excepcion: excepcion,
     });
   } catch (error) {
-    if (error instanceof ZodError) {
-      return next(
-        new BadRequestError("Datos de entrada inválidos.", error.errors)
-      );
-    }
     next(error);
   }
 };
@@ -427,7 +321,7 @@ const updateExcepcionDisponibilidad = async (req, res, next) => {
  * considerando horarios base, citas existentes y excepciones de disponibilidad.
  * @param {number} administradorId - ID del administrador.
  * @param {string} fecha - Fecha en formato 'YYYY-MM-DD' (se asume en la zona horaria de Chile).
- * @param {number} tipoAtencionId - ID del tipo de atención para determinar la duración y el buffer de la cita.
+ * @param {number} tipoAtencionId - ID del tipo de atención para determinar la duración y el buffer de la cita que se quiere agendar.
  * @param {number|null} [excludeCitaId=null] - Opcional: ID de una cita a excluir de la verificación de superposición.
  * @param {object} [transaction=null] - Objeto de transacción de Sequelize.
  * @returns {Promise<Array<Object>>} Un array de objetos { start: string (ISO UTC), end: string (ISO UTC) }
@@ -437,6 +331,7 @@ const updateExcepcionDisponibilidad = async (req, res, next) => {
 const _getAvailableSlotsData = async (
   administradorId,
   fecha,
+  tipoAtencionId,
   excludeCitaId = null,
   transaction = null
 ) => {
@@ -448,9 +343,14 @@ const _getAvailableSlotsData = async (
   }
   const dayOfWeek = targetDateLocal.weekday;
 
-  // Los valores de duración y buffer ahora son fijos
-  const duracionCita = 60; // 1 hora
-  const bufferMinutes = 30; // 30 minutos
+  const tipoAtencion = await TipoAtencion.findByPk(tipoAtencionId, {
+    transaction,
+  });
+  if (!tipoAtencion) {
+    throw new NotFoundError("Tipo de atención no encontrado.");
+  }
+  const duracionCita = tipoAtencion.duracion_minutos;
+  const bufferMinutes = tipoAtencion.buffer_minutos;
 
   const horariosBase = await HorarioDisponible.findAll({
     where: { administrador_id: administradorId, dia_semana: dayOfWeek },
@@ -476,13 +376,12 @@ const _getAvailableSlotsData = async (
 
   const citasExistentes = await Cita.findAll({
     where: whereCitasClause,
-    // Ya no necesitas incluir TipoAtencion aquí
-    // include: [
-    //   {
-    //     model: TipoAtencion,
-    //     attributes: ["duracion_minutos", "buffer_minutos"],
-    //   },
-    // ],
+    include: [
+      {
+        model: TipoAtencion,
+        attributes: ["duracion_minutos", "buffer_minutos"],
+      },
+    ],
     transaction,
   });
 
@@ -490,9 +389,9 @@ const _getAvailableSlotsData = async (
     const bookedStartUTC = DateTime.fromJSDate(cita.fecha_hora_cita, {
       zone: "utc",
     });
-    // Usar los valores fijos para calcular el bloque
     const bookedEndUTC = bookedStartUTC.plus({
-      minutes: duracionCita + bufferMinutes,
+      minutes:
+        cita.TipoAtencion.duracion_minutos + cita.TipoAtencion.buffer_minutos,
     });
     return { start: bookedStartUTC, end: bookedEndUTC };
   });
@@ -524,21 +423,38 @@ const _getAvailableSlotsData = async (
         .setZone("utc");
       const nowUTC = DateTime.now().setZone("utc");
 
-      let isAvailable = true;
+      let isAvailable = true; // 1. Verificar si el slot ha pasado
 
-      // 1. Verificar si el slot ha pasado
       if (slotEndUTC <= nowUTC) {
         isAvailable = false;
-      }
+      } // 2. Verificar solapamiento con excepciones
 
-      // 2. Verificar solapamiento con excepciones
       if (isAvailable) {
         for (const excepcion of excepciones) {
-          // ... (la lógica de excepciones no cambia)
-        }
-      }
+          if (excepcion.es_dia_completo) {
+            isAvailable = false;
+            break;
+          }
 
-      // 3. Verificar solapamiento con citas existentes
+          const bloqueoStartLocal = targetDateLocal.set({
+            hour: parseInt(excepcion.hora_inicio_bloqueo.split(":")[0]),
+            minute: parseInt(excepcion.hora_inicio_bloqueo.split(":")[1]),
+          });
+          const bloqueoEndLocal = targetDateLocal.set({
+            hour: parseInt(excepcion.hora_fin_bloqueo.split(":")[0]),
+            minute: parseInt(excepcion.hora_fin_bloqueo.split(":")[1]),
+          });
+
+          if (
+            slotEndUTC > bloqueoStartLocal.setZone("utc") &&
+            bloqueoEndLocal.setZone("utc") > slotStartUTC
+          ) {
+            isAvailable = false;
+            break;
+          }
+        }
+      } // 3. Verificar solapamiento con citas existentes
+
       if (isAvailable) {
         for (const booked of bookedBlocks) {
           if (
@@ -560,13 +476,8 @@ const _getAvailableSlotsData = async (
 
       currentTime = currentTime.plus({ minutes: duracionCita + bufferMinutes });
     }
-  }
+  } // Ordenar la lista final
 
-  // Ya no es necesario añadir el slot de la cita a editar, ya que todas
-  // las franjas tienen la misma duración y el `excludeCitaId` ya la excluye
-  // del cálculo inicial.
-
-  // Ordenar la lista final
   franjasDisponibles.sort((a, b) => new Date(a.start) - new Date(b.start));
 
   return franjasDisponibles;
