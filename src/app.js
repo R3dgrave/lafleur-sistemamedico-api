@@ -13,7 +13,9 @@ const app = express();
 // Middlewares
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL_PRODUCTION,
+    origin: process.env.NODE_ENV === 'production'
+      ? process.env.FRONTEND_URL_PRODUCTION
+      : process.env.FRONTEND_URL,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,

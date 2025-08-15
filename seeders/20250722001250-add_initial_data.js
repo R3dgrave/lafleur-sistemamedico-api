@@ -1,43 +1,107 @@
-"use strict";
+'use strict';
 const bcrypt = require("bcryptjs");
+// Importamos las funciones de date-fns para verificar y modificar fechas
+const { isSaturday, isSunday, addDays } = require('date-fns');
 
-/** @type {import('sequelize-cli').Migration} */
+// ------------------
+// Función de ayuda para corregir fechas de fin de semana
+// ------------------
+/**
+ * @param {Date} date - La fecha a verificar.
+ * @returns {Date} El próximo día hábil.
+ */
+function getNextWorkingDay(date) {
+  let nextDay = new Date(date);
+  while (isSaturday(nextDay) || isSunday(nextDay)) {
+    nextDay = addDays(nextDay, 1);
+  }
+  return nextDay;
+}
+
 module.exports = {
   async up(queryInterface, Sequelize) {
-    const today = new Date("2025-07-30T00:00:00Z");
+    // Definimos la fecha de hoy de forma dinámica para que el script siempre funcione.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Opcional: para asegurar que la fecha sea siempre el inicio del día.
+
+    // ------------------
+    // Funciones de ayuda para generar fechas y horas
+    // ------------------
+
+    /**
+     * @param {number} daysOffset - Número de días a sumar o restar (ej: -3 para hace 3 días, 4 para en 4 días).
+     * @param {number} hours - Hora del día (0-23).
+     * @param {number} minutes - Minutos (0-59).
+     * @returns {Date} Una nueva fecha ajustada.
+     */
+    const createDate = (daysOffset, hours, minutes) => {
+      const newDate = new Date(today);
+      newDate.setDate(today.getDate() + daysOffset);
+      newDate.setHours(hours, minutes, 0, 0);
+      return newDate;
+    };
+
+    /**
+     * Genera un array de objetos para las excepciones de almuerzo para todos los administradores.
+     * @param {number[]} adminIds - Array de IDs de los administradores.
+     * @param {number} daysToGenerate - Número de días futuros para generar la excepción.
+     * @returns {Array} Un array de objetos de excepción.
+     */
+    const generateLunchExceptions = (adminIds, daysToGenerate) => {
+      const exceptions = [];
+      for (const adminId of adminIds) {
+        for (let i = 0; i < daysToGenerate; i++) {
+          const date = new Date(today);
+          date.setDate(today.getDate() + i);
+          // Omitir fines de semana (sábado = 6, domingo = 0)
+          if (date.getDay() !== 0 && date.getDay() !== 6) {
+            exceptions.push({
+              administrador_id: adminId,
+              fecha: date.toISOString().split("T")[0],
+              hora_inicio_bloqueo: "13:00:00",
+              hora_fin_bloqueo: "14:00:00",
+              es_dia_completo: false,
+              descripcion: "Almuerzo",
+            });
+          }
+        }
+      }
+      return exceptions;
+    };
+
     const hashedPassword = await bcrypt.hash("123456", 10);
+    const passwordDoctor = await bcrypt.hash("passwordDoc", 10);
 
     // 1. Administradores
-    await queryInterface.bulkInsert(
-      "Administradores",
-      [
-        {
-          administrador_id: 1,
-          nombre: "Admin",
-          apellido: "Principal",
-          email: "correo@gmail.com",
-          password_hash: hashedPassword,
-          role: "super_admin",
-          profile_picture_url:
-            "https://placehold.co/120x120/cccccc/333333?text=Admin",
-          receive_email_notifications: true,
-          receive_sms_notifications: false,
-        },
-        {
-          administrador_id: 2,
-          nombre: "Doctora",
-          apellido: "Lopez",
-          email: "doctora.lopez@example.com",
-          password_hash: await bcrypt.hash("passwordDoc", 10),
-          role: "admin",
-          profile_picture_url:
-            "https://placehold.co/120x120/99ccff/000000?text=Doc",
-          receive_email_notifications: true,
-          receive_sms_notifications: true,
-        },
-      ],
-      { ignoreDuplicates: true }
-    );
+    const administradores = [
+      {
+        administrador_id: 1,
+        nombre: "Admin",
+        apellido: "Principal",
+        email: "correo@gmail.com",
+        password_hash: hashedPassword,
+        role: "super_admin",
+        profile_picture_url:
+          "https://placehold.co/120x120/cccccc/333333?text=Admin",
+        receive_email_notifications: true,
+        receive_sms_notifications: false,
+      },
+      {
+        administrador_id: 2,
+        nombre: "Doctora",
+        apellido: "Lopez",
+        email: "doctora.lopez@example.com",
+        password_hash: passwordDoctor,
+        role: "admin",
+        profile_picture_url:
+          "https://placehold.co/120x120/99ccff/000000?text=Doc",
+        receive_email_notifications: true,
+        receive_sms_notifications: true,
+      },
+    ];
+    await queryInterface.bulkInsert("Administradores", administradores, {
+      ignoreDuplicates: true,
+    });
 
     // 2. Pacientes
     await queryInterface.bulkInsert(
@@ -117,7 +181,7 @@ module.exports = {
       { ignoreDuplicates: true }
     );
 
-    // 3. Tipo_Atencion (Mantener existentes)
+    // 3. Tipo_Atencion
     await queryInterface.bulkInsert(
       "Tipo_Atencion",
       [
@@ -148,266 +212,176 @@ module.exports = {
         {
           tipo_atencion_id: 5,
           nombre_atencion: "Control de Diabetes",
-          duracion_minutos: 45,
-          buffer_minutos: 15,
+          duracion_minutos: 60,
+          buffer_minutos: 30,
         },
         {
           tipo_atencion_id: 6,
           nombre_atencion: "Control de Hipertensión",
-          duracion_minutos: 45,
-          buffer_minutos: 15,
+          duracion_minutos: 60,
+          buffer_minutos: 30,
         },
       ],
       { ignoreDuplicates: true }
     );
 
-    // 4. Horarios_Disponibles (Mantener existentes)
-    const horarios = [
-      {
-        administrador_id: 1,
-        dia_semana: 1,
-        hora_inicio: "09:00:00",
-        hora_fin: "17:00:00",
-      }, // Lunes
-      {
-        administrador_id: 1,
-        dia_semana: 2,
-        hora_inicio: "09:00:00",
-        hora_fin: "17:00:00",
-      }, // Martes
-      {
-        administrador_id: 1,
-        dia_semana: 3,
-        hora_inicio: "09:00:00",
-        hora_fin: "17:00:00",
-      }, // Miércoles
-      {
-        administrador_id: 1,
-        dia_semana: 4,
-        hora_inicio: "09:00:00",
-        hora_fin: "17:00:00",
-      }, // Jueves
-      {
-        administrador_id: 1,
-        dia_semana: 5,
-        hora_inicio: "09:00:00",
-        hora_fin: "17:00:00",
-      }, // Viernes
-      {
-        administrador_id: 2,
-        dia_semana: 1,
-        hora_inicio: "10:00:00",
-        hora_fin: "18:00:00",
-      }, // Lunes Doc Lopez
-      {
-        administrador_id: 2,
-        dia_semana: 3,
-        hora_inicio: "10:00:00",
-        hora_fin: "18:00:00",
-      }, // Miércoles Doc Lopez
-    ];
+    // 4. Horarios_Disponibles
+    const horarios = [];
+    const weekdays = [1, 2, 3, 4, 5]; // Lunes a Viernes
+
+    // Generar horario de 09:00 a 18:00 para todos los administradores en días de semana
+    for (const admin of administradores) {
+      for (const day of weekdays) {
+        horarios.push({
+          administrador_id: admin.administrador_id,
+          dia_semana: day,
+          hora_inicio: "09:00:00",
+          hora_fin: "18:00:00",
+        });
+      }
+    }
     await queryInterface.bulkInsert("Horarios_Disponibles", horarios, {
       ignoreDuplicates: true,
     });
 
-    // 5. Excepciones_Disponibilidad (Mantener existentes)
-    const excepciones = [
+    // 5. Excepciones_Disponibilidad
+    // Generamos las excepciones de almuerzo para los próximos 7 días laborales para ambos administradores.
+    const excepciones = generateLunchExceptions(
+      administradores.map((a) => a.administrador_id),
+      7
+    );
+
+    // Añadir otras excepciones estáticas para más variedad
+    excepciones.push(
       {
         administrador_id: 1,
-        fecha: "2025-12-25",
-        es_dia_completo: true,
-        descripcion: "Feriado de Navidad",
-      },
-      {
-        administrador_id: 1,
-        fecha: "2025-09-18",
+        fecha: createDate(
+          today.getFullYear(),
+          today.getMonth(),
+          18
+        ).toISOString().split("T")[0],
         es_dia_completo: true,
         descripcion: "Feriado Nacional",
       },
       {
-        administrador_id: 1,
-        fecha: "2025-07-30",
-        hora_inicio_bloqueo: "13:00:00",
-        hora_fin_bloqueo: "14:00:00",
-        es_dia_completo: false,
-        descripcion: "Almuerzo",
-      },
-      {
         administrador_id: 2,
-        fecha: "2025-08-15",
+        fecha: createDate(
+          today.getFullYear(),
+          today.getMonth() + 1,
+          10
+        ).toISOString().split("T")[0],
         es_dia_completo: true,
         descripcion: "Vacaciones Dra. Lopez",
-      },
-    ];
+      }
+    );
+
     await queryInterface.bulkInsert("Excepciones_Disponibilidad", excepciones, {
       ignoreDuplicates: true,
     });
 
     // 6. Citas (Más citas, con fechas variadas y estados)
+    const rawAppointments = [
+      {
+        // Cita en el pasado, completada (hace 5 días)
+        cita_id: 1,
+        paciente_id: 1,
+        tipo_atencion_id: 1,
+        fecha_hora_cita: createDate(-5, 10, 30),
+        estado_cita: "Completada",
+        notas: "Revisión anual de Paciente Uno.",
+        fecha_creacion: createDate(-6, 9, 0),
+        administrador_id: 1,
+      },
+      {
+        // Cita cancelada en el pasado (hace 3 días)
+        cita_id: 2,
+        paciente_id: 2,
+        tipo_atencion_id: 2,
+        fecha_hora_cita: createDate(-3, 15, 0),
+        estado_cita: "Cancelada",
+        notas: "Cita cancelada por el paciente.",
+        fecha_creacion: createDate(-4, 11, 0),
+        administrador_id: 2,
+      },
+      {
+        // Cita en el pasado, completada (hace 1 día)
+        cita_id: 3,
+        paciente_id: 3,
+        tipo_atencion_id: 6,
+        fecha_hora_cita: createDate(-1, 9, 0),
+        estado_cita: "Completada",
+        notas: "Primera consulta por hipertensión. Paciente derivado.",
+        fecha_creacion: createDate(-2, 14, 30),
+        administrador_id: 2,
+      },
+      {
+        // Cita confirmada para el futuro (en 2 días)
+        cita_id: 4,
+        paciente_id: 4,
+        tipo_atencion_id: 4,
+        fecha_hora_cita: createDate(2, 11, 0),
+        estado_cita: "Confirmada",
+        notas: "Sesión de seguimiento estética.",
+        fecha_creacion: createDate(0, 16, 0),
+        administrador_id: 1,
+      },
+      {
+        // Cita pendiente para el futuro (en 4 días)
+        cita_id: 5,
+        paciente_id: 5,
+        tipo_atencion_id: 1,
+        fecha_hora_cita: createDate(4, 15, 30),
+        estado_cita: "Pendiente",
+        notas: "Consulta de seguimiento.",
+        fecha_creacion: createDate(2, 8, 0),
+        administrador_id: 2,
+      },
+      {
+        // Cita confirmada para el futuro (en 7 días)
+        cita_id: 6,
+        paciente_id: 1,
+        tipo_atencion_id: 3,
+        fecha_hora_cita: createDate(7, 10, 0),
+        estado_cita: "Confirmada",
+        notas: "Cita de obstetricia.",
+        fecha_creacion: createDate(5, 12, 0),
+        administrador_id: 2,
+      },
+      {
+        // Cita pendiente para el futuro (en 10 días)
+        cita_id: 7,
+        paciente_id: 2,
+        tipo_atencion_id: 5,
+        fecha_hora_cita: createDate(10, 16, 0),
+        estado_cita: "Pendiente",
+        notas: "Control de diabetes.",
+        fecha_creacion: createDate(8, 14, 0),
+        administrador_id: 1,
+      },
+      {
+        // Cita cancelada en el futuro (en 1 día)
+        cita_id: 8,
+        paciente_id: 3,
+        tipo_atencion_id: 1,
+        fecha_hora_cita: createDate(1, 10, 0),
+        estado_cita: "Cancelada",
+        notas: "Cita cancelada por imprevisto del doctor.",
+        fecha_creacion: createDate(-1, 10, 0),
+        administrador_id: 1,
+      },
+    ];
+
+    // Nuevo paso: Corregimos las fechas que caen en fin de semana.
+    const correctedAppointments = rawAppointments.map(appointment => {
+      if (isSaturday(appointment.fecha_hora_cita) || isSunday(appointment.fecha_hora_cita)) {
+        appointment.fecha_hora_cita = getNextWorkingDay(appointment.fecha_hora_cita);
+      }
+      return appointment;
+    });
+
     await queryInterface.bulkInsert(
       "Citas",
-      [
-        {
-          cita_id: 1,
-          paciente_id: 1,
-          tipo_atencion_id: 1,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 5,
-            10,
-            0
-          ), // Hace 5 días
-          estado_cita: "Completada",
-          notas: "Cita inicial. Paciente con buen estado general.",
-          fecha_creacion: today,
-          administrador_id: 1,
-        },
-        {
-          cita_id: 2,
-          paciente_id: 1,
-          tipo_atencion_id: 5,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 2,
-            11,
-            0
-          ), // Hace 2 días
-          estado_cita: "Confirmada",
-          notas: "Control de diabetes. Ajuste de medicación.",
-          fecha_creacion: today,
-          administrador_id: 1,
-        },
-        {
-          cita_id: 3,
-          paciente_id: 2,
-          tipo_atencion_id: 1,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 10,
-            14,
-            0
-          ), // Hace 10 días
-          estado_cita: "Completada",
-          notas: "Revisión anual. Todo en orden.",
-          fecha_creacion: today,
-          administrador_id: 1,
-        },
-        {
-          cita_id: 4,
-          paciente_id: 3,
-          tipo_atencion_id: 6,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 3,
-            9,
-            30
-          ), // En 3 días
-          estado_cita: "Pendiente",
-          notas: "Primera consulta por hipertensión. Paciente derivado.",
-          fecha_creacion: today,
-          administrador_id: 2,
-        },
-        {
-          cita_id: 5,
-          paciente_id: 4,
-          tipo_atencion_id: 4,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 7,
-            16,
-            0
-          ), // En 7 días
-          estado_cita: "Pendiente",
-          notas: "Sesión de seguimiento estética.",
-          fecha_creacion: today,
-          administrador_id: 1,
-        },
-        {
-          cita_id: 6,
-          paciente_id: 1,
-          tipo_atencion_id: 5,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 15,
-            9,
-            0
-          ), // En 15 días
-          estado_cita: "Pendiente",
-          notas: "Próximo control de diabetes.",
-          fecha_creacion: today,
-          administrador_id: 1,
-        },
-        {
-          cita_id: 7,
-          paciente_id: 2,
-          tipo_atencion_id: 2,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 20,
-            10,
-            0
-          ), // En 20 días
-          estado_cita: "Pendiente",
-          notas: "Control prenatal.",
-          fecha_creacion: today,
-          administrador_id: 1,
-        },
-        {
-          cita_id: 8,
-          paciente_id: 3,
-          tipo_atencion_id: 6,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 1,
-            15,
-            0
-          ), // Ayer
-          estado_cita: "Confirmada",
-          notas: "Control de presión arterial. Paciente con medicación.",
-          fecha_creacion: today,
-          administrador_id: 2,
-        },
-        {
-          cita_id: 9,
-          paciente_id: 4,
-          tipo_atencion_id: 1,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 1,
-            11,
-            0
-          ), // Mañana
-          estado_cita: "Pendiente",
-          notas: "Consulta por chequeo general.",
-          fecha_creacion: today,
-          administrador_id: 1,
-        },
-        {
-          cita_id: 10,
-          paciente_id: 5,
-          tipo_atencion_id: 1,
-          fecha_hora_cita: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 7,
-            9,
-            0
-          ), // Hace 7 días
-          estado_cita: "Completada",
-          notas: "Primera consulta. Anamnesis completa.",
-          fecha_creacion: today,
-          administrador_id: 1,
-        },
-      ],
+      correctedAppointments,
       { ignoreDuplicates: true }
     );
 
@@ -447,7 +421,7 @@ module.exports = {
       { ignoreDuplicates: true }
     );
 
-    // 8. Historia_Clinica (Asegúrate de que existan para cada paciente antes de los demás registros)
+    // 8. Historia_Clinica
     await queryInterface.bulkInsert(
       "Historia_Clinica",
       [
@@ -492,13 +466,7 @@ module.exports = {
         {
           historia_clinica_id: 1,
           cita_id: 1,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 5,
-            10,
-            15
-          ),
+          fecha_registro: createDate(-5, 10, 35),
           motivo_consulta: "Dolor de cabeza persistente.",
           antecedentes_personales: "Migrañas ocasionales en la adolescencia.",
           medicamentos_actuales: "Ninguno.",
@@ -508,17 +476,11 @@ module.exports = {
           habitos_alimentacion: "Balanceada.",
         },
         {
-          historia_clinica_id: 1,
+          historia_clinica_id: 2,
           cita_id: 2,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 2,
-            11,
-            10
-          ),
-          motivo_consulta: "Seguimiento de diabetes tipo 2.",
-          antecedentes_personales: "Diagnóstico hace 5 años.",
+          fecha_registro: createDate(-3, 15, 0),
+          motivo_consulta: "Cancelada por el paciente.",
+          antecedentes_personales: "Paciente diabético.",
           medicamentos_actuales: "Metformina 500mg.",
           alergias: "Ninguna conocida.",
           aqx: "Apendicectomía (2010).",
@@ -528,33 +490,9 @@ module.exports = {
           habitos_alimentacion: "Dieta controlada.",
         },
         {
-          historia_clinica_id: 2,
-          cita_id: 3,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 10,
-            14,
-            10
-          ),
-          motivo_consulta: "Chequeo ginecológico anual.",
-          antecedentes_familiares: "Madre con osteoporosis.",
-          medicamentos_actuales: "Anticonceptivos orales.",
-          alergias: "Penicilina.",
-          habitos_tabaco: false,
-          habitos_alcohol: false,
-          habitos_alimentacion: "Vegetariana.",
-        },
-        {
           historia_clinica_id: 3,
-          cita_id: 8,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 1,
-            15,
-            10
-          ),
+          cita_id: 3,
+          fecha_registro: createDate(-1, 9, 10),
           motivo_consulta: "Control de hipertensión.",
           antecedentes_personales: "Diagnóstico reciente.",
           medicamentos_actuales: "Losartán 50mg.",
@@ -564,22 +502,16 @@ module.exports = {
           habitos_alimentacion: "Normal.",
         },
         {
-          historia_clinica_id: 5,
-          cita_id: 10,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 7,
-            9,
-            15
-          ),
-          motivo_consulta: "Consulta de primera vez. Ansiedad.",
-          antecedentes_personales: "Historial de estrés laboral.",
-          medicamentos_actuales: "Suplementos vitamínicos.",
-          alergias: "Ninguna.",
+          historia_clinica_id: 4,
+          cita_id: 4,
+          fecha_registro: today,
+          motivo_consulta: "Sesión de seguimiento estética.",
+          antecedentes_familiares: "Madre con osteoporosis.",
+          medicamentos_actuales: "Anticonceptivos orales.",
+          alergias: "Penicilina.",
           habitos_tabaco: false,
           habitos_alcohol: false,
-          habitos_alimentacion: "Irregular.",
+          habitos_alimentacion: "Vegetariana.",
         },
       ],
       { ignoreDuplicates: true }
@@ -592,71 +524,16 @@ module.exports = {
         {
           historia_clinica_id: 1,
           cita_id: 1,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 5,
-            10,
-            30
-          ),
+          fecha_registro: createDate(-5, 10, 45),
           region_explorada: "Cabeza y Cuello",
-          hallazgos:
-            "Sin hallazgos patológicos relevantes. Palpación de cuello normal.",
-        },
-        {
-          historia_clinica_id: 1,
-          cita_id: 2,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 2,
-            11,
-            30
-          ),
-          region_explorada: "Abdomen y Extremidades",
-          hallazgos:
-            "Abdomen blando, depresible, no doloroso. Pulsos periféricos presentes. Edema leve en tobillos.",
-        },
-        {
-          historia_clinica_id: 2,
-          cita_id: 3,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 10,
-            14,
-            30
-          ),
-          region_explorada: "Ginecológica",
-          hallazgos: "Examen bimanual y especular normal. Citología tomada.",
+          hallazgos: "Sin hallazgos patológicos relevantes. Palpación de cuello normal.",
         },
         {
           historia_clinica_id: 3,
-          cita_id: 8,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 1,
-            15,
-            30
-          ),
+          cita_id: 3,
+          fecha_registro: createDate(-1, 9, 30),
           region_explorada: "Cardiovascular y Pulmonar",
-          hallazgos:
-            "Ruidos cardíacos rítmicos, sin soplos. Campos pulmonares limpios, buena entrada de aire.",
-        },
-        {
-          historia_clinica_id: 5,
-          cita_id: 10,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 7,
-            9,
-            30
-          ),
-          region_explorada: "General",
-          hallazgos:
-            "Paciente consciente, orientado. Piel y mucosas hidratadas. Sin signos de deshidratación.",
+          hallazgos: "Ruidos cardíacos rítmicos, sin soplos. Campos pulmonares limpios, buena entrada de aire.",
         },
       ],
       { ignoreDuplicates: true }
@@ -669,13 +546,7 @@ module.exports = {
         {
           historia_clinica_id: 1,
           cita_id: 1,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 5,
-            10,
-            45
-          ),
+          fecha_registro: createDate(-5, 11, 0),
           codigo_cie: "G43.9",
           nombre_diagnostico: "Migraña no especificada",
           descripcion: "Episodios recurrentes de cefalea.",
@@ -683,68 +554,14 @@ module.exports = {
           estado_diagnostico: "Activo",
         },
         {
-          historia_clinica_id: 1,
-          cita_id: 2,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 2,
-            11,
-            45
-          ),
-          codigo_cie: "E11.9",
-          nombre_diagnostico: "Diabetes Mellitus Tipo 2 no especificada",
-          descripcion: "Control metabólico en curso.",
-          es_principal: true,
-          estado_diagnostico: "Crónico",
-        },
-        {
-          historia_clinica_id: 2,
-          cita_id: 3,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 10,
-            14,
-            45
-          ),
-          codigo_cie: "Z01.4",
-          nombre_diagnostico: "Examen ginecológico general",
-          descripcion: "Chequeo anual de rutina.",
-          es_principal: true,
-          estado_diagnostico: "Resuelto",
-        },
-        {
           historia_clinica_id: 3,
-          cita_id: 8,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 1,
-            15,
-            45
-          ),
+          cita_id: 3,
+          fecha_registro: createDate(-1, 9, 45),
           codigo_cie: "I10",
           nombre_diagnostico: "Hipertensión esencial (primaria)",
           descripcion: "Presión arterial elevada, en tratamiento.",
           es_principal: true,
           estado_diagnostico: "Crónico",
-        },
-        {
-          historia_clinica_id: 5,
-          cita_id: 10,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 7,
-            9,
-            45
-          ),
-          codigo_cie: "F41.1",
-          nombre_diagnostico: "Trastorno de ansiedad generalizada",
-          descripcion: "Ansiedad excesiva y preocupación crónica.",
-          es_principal: true,
-          estado_diagnostico: "Activo",
         },
       ],
       { ignoreDuplicates: true }
@@ -757,122 +574,22 @@ module.exports = {
         {
           historia_clinica_id: 1,
           cita_id: 1,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 5,
-            11,
-            0
-          ),
-          descripcion_plan:
-            "Manejo de migraña. Evitar desencadenantes conocidos.",
+          fecha_registro: createDate(-5, 11, 15),
+          descripcion_plan: "Manejo de migraña. Evitar desencadenantes conocidos.",
           medicamentos_recetados: "Ibuprofeno 400mg PRN.",
           indicaciones_adicionales: "Descanso en ambiente oscuro y tranquilo.",
-          proxima_cita_recomendada: new Date(
-            today.getFullYear(),
-            today.getMonth() + 1,
-            today.getDate() + 15
-          )
-            .toISOString()
-            .split("T")[0], // En 1 mes y 15 días
+          proxima_cita_recomendada: createDate(30, 9, 30).toISOString().split("T")[0],
           receta_adjunta_url: "https://ejemplo.com/receta-migrana-p1.pdf",
         },
         {
-          historia_clinica_id: 1,
-          cita_id: 2,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 2,
-            12,
-            0
-          ),
-          descripcion_plan:
-            "Ajuste de medicación para diabetes. Control de glucemia.",
-          medicamentos_recetados: "Metformina 850mg c/12h.",
-          indicaciones_adicionales:
-            "Dieta hipocalórica, ejercicio moderado 30 min/día.",
-          proxima_cita_recomendada: new Date(
-            today.getFullYear(),
-            today.getMonth() + 2,
-            today.getDate()
-          )
-            .toISOString()
-            .split("T")[0], // En 2 meses
-          receta_adjunta_url: null,
-        },
-        {
           historia_clinica_id: 3,
-          cita_id: 8,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 1,
-            16,
-            0
-          ),
-          descripcion_plan:
-            "Control de hipertensión. Monitoreo domiciliario de PA.",
+          cita_id: 3,
+          fecha_registro: createDate(-1, 10, 0),
+          descripcion_plan: "Control de hipertensión. Monitoreo domiciliario de PA.",
           medicamentos_recetados: "Losartán 50mg OD.",
-          indicaciones_adicionales:
-            "Reducir ingesta de sodio, caminata diaria.",
-          proxima_cita_recomendada: new Date(
-            today.getFullYear(),
-            today.getMonth() + 1,
-            today.getDate() + 7
-          )
-            .toISOString()
-            .split("T")[0], // En 1 mes y 7 días
-          receta_adjunta_url:
-            "https://ejemplo.com/receta-hipertension-carlos.pdf",
-        },
-        {
-          historia_clinica_id: 4,
-          cita_id: 5,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 7,
-            16,
-            30
-          ), // Fecha futura, después de la cita
-          descripcion_plan:
-            "Plan de tratamiento para acné severo. Inicio de isotretinoína.",
-          medicamentos_recetados: "Isotretinoína 20mg OD.",
-          indicaciones_adicionales:
-            "Hidratación constante, protección solar estricta. Control mensual.",
-          proxima_cita_recomendada: new Date(
-            today.getFullYear(),
-            today.getMonth() + 1,
-            today.getDate() + 7
-          )
-            .toISOString()
-            .split("T")[0], // En 1 mes y 7 días
-          receta_adjunta_url: "https://ejemplo.com/receta-acne-ana.pdf",
-        },
-        {
-          historia_clinica_id: 5,
-          cita_id: 10,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 7,
-            10,
-            0
-          ),
-          descripcion_plan:
-            "Manejo inicial de ansiedad. Terapia cognitivo-conductual.",
-          medicamentos_recetados: "Ninguno por el momento.",
-          indicaciones_adicionales:
-            "Técnicas de relajación, mindfulness. Considerar derivación a psicólogo.",
-          proxima_cita_recomendada: new Date(
-            today.getFullYear(),
-            today.getMonth() + 1,
-            today.getDate()
-          )
-            .toISOString()
-            .split("T")[0], // En 1 mes
-          receta_adjunta_url: null,
+          indicaciones_adicionales: "Reducir ingesta de sodio, caminata diaria.",
+          proxima_cita_recomendada: createDate(15, 14, 0).toISOString().split("T")[0],
+          receta_adjunta_url: "https://ejemplo.com/receta-hipertension-carlos.pdf",
         },
       ],
       { ignoreDuplicates: true }
@@ -885,13 +602,7 @@ module.exports = {
         {
           historia_clinica_id: 1,
           cita_id: 1,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 6,
-            9,
-            0
-          ),
+          fecha_registro: createDate(-5, 10, 0),
           peso: 75.5,
           altura: 1.75,
           imc: 24.69,
@@ -905,37 +616,9 @@ module.exports = {
           notas_adicionales: "Primer control general.",
         },
         {
-          historia_clinica_id: 2,
-          cita_id: 2,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 11,
-            13,
-            0
-          ),
-          peso: 62.0,
-          altura: 1.63,
-          imc: 23.36,
-          perimetro_cintura: 78.0,
-          perimetro_cadera: 90.0,
-          presion_sistolica: 110,
-          presion_diastolica: 70,
-          frecuencia_cardiaca: 68,
-          temperatura: 37.0,
-          saturacion_oxigeno: 99.0,
-          notas_adicionales: "Control anual.",
-        },
-        {
           historia_clinica_id: 3,
-          cita_id: 8,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 2,
-            14,
-            0
-          ),
+          cita_id: 3,
+          fecha_registro: createDate(-1, 9, 0),
           peso: 90.1,
           altura: 1.8,
           imc: 27.81,
@@ -946,142 +629,7 @@ module.exports = {
           frecuencia_cardiaca: 85,
           temperatura: 36.5,
           saturacion_oxigeno: 97.0,
-          notas_adicionales:
-            "Valores iniciales para tratamiento de hipertensión.",
-        },
-        {
-          historia_clinica_id: 4,
-          cita_id: 5,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 6,
-            10,
-            0
-          ), // Fecha futura
-          peso: 58.0,
-          altura: 1.68,
-          imc: 20.53,
-          perimetro_cintura: 70.0,
-          perimetro_cadera: 88.0,
-          presion_sistolica: 115,
-          presion_diastolica: 75,
-          frecuencia_cardiaca: 70,
-          temperatura: 36.9,
-          saturacion_oxigeno: 98.0,
-          notas_adicionales: "Evaluación pre-tratamiento estético.",
-        },
-        {
-          historia_clinica_id: 5,
-          cita_id: 10,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() - 8,
-            8,
-            30
-          ),
-          peso: 68.0,
-          altura: 1.7,
-          imc: 23.53,
-          perimetro_cintura: 80.0,
-          perimetro_cadera: 92.0,
-          presion_sistolica: 125,
-          presion_diastolica: 82,
-          frecuencia_cardiaca: 75,
-          temperatura: 37.1,
-          saturacion_oxigeno: 98.8,
-          notas_adicionales: "Evaluación inicial de salud.",
-        },
-        // Nuevos registros para citas futuras
-        {
-          historia_clinica_id: 3,
-          cita_id: 4,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 2,
-            8,
-            30
-          ), // Un día antes de la cita
-          peso: 89.5,
-          altura: 1.8,
-          imc: 27.62,
-          perimetro_cintura: 99.0,
-          perimetro_cadera: 104.0,
-          presion_sistolica: 140,
-          presion_diastolica: 90,
-          frecuencia_cardiaca: 80,
-          temperatura: 36.6,
-          saturacion_oxigeno: 97.5,
-          notas_adicionales:
-            "Chequeo pre-consulta de seguimiento de hipertensión.",
-        },
-        {
-          historia_clinica_id: 1,
-          cita_id: 6,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 14,
-            8,
-            0
-          ), // Un día antes de la cita
-          peso: 75.0,
-          altura: 1.75,
-          imc: 24.53,
-          perimetro_cintura: 84.0,
-          perimetro_cadera: 94.0,
-          presion_sistolica: 118,
-          presion_diastolica: 78,
-          frecuencia_cardiaca: 70,
-          temperatura: 36.7,
-          saturacion_oxigeno: 98.0,
-          notas_adicionales: "Valores previos al control de diabetes.",
-        },
-        {
-          historia_clinica_id: 2,
-          cita_id: 7,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 19,
-            9,
-            0
-          ),
-          peso: 63.5,
-          altura: 1.63,
-          imc: 23.93,
-          perimetro_cintura: 80.0,
-          perimetro_cadera: 92.0,
-          presion_sistolica: 125,
-          presion_diastolica: 85,
-          frecuencia_cardiaca: 88,
-          temperatura: 37.2,
-          saturacion_oxigeno: 98.9,
-          notas_adicionales: "Mediciones para control prenatal.",
-        },
-        {
-          historia_clinica_id: 4,
-          cita_id: 9,
-          fecha_registro: new Date(
-            today.getFullYear(),
-            today.getMonth(),
-            today.getDate() + 1,
-            10,
-            30
-          ),
-          peso: 58.2,
-          altura: 1.68,
-          imc: 20.6,
-          perimetro_cintura: 70.5,
-          perimetro_cadera: 88.5,
-          presion_sistolica: 116,
-          presion_diastolica: 76,
-          frecuencia_cardiaca: 71,
-          temperatura: 37.0,
-          saturacion_oxigeno: 98.7,
-          notas_adicionales: "Chequeo inicial para consulta general.",
+          notas_adicionales: "Valores iniciales para tratamiento de hipertensión.",
         },
       ],
       { ignoreDuplicates: true }
