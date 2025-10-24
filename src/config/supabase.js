@@ -16,6 +16,11 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
     autoRefreshToken: false,
     detectSessionInUrl: false,
   },
+  global: {
+      headers: {
+        'Authorization': `Bearer ${customJwt}`,
+      },
+    },
 });
 
 module.exports = supabase;
